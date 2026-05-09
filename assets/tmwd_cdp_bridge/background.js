@@ -16,9 +16,11 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 async function handleExtMessage(msg, sender) {
+  if (msg.cmd === 'status') return handleStatus();
   if (msg.cmd === 'cookies') return await handleCookies(msg, sender);
   if (msg.cmd === 'cdp') return await handleCDP(msg, sender);
   if (msg.cmd === 'batch') return await handleBatch(msg, sender);
+  if (msg.cmd === 'openTab') return await handleOpenTab(msg);
   if (msg.cmd === 'tabs') {
     try {
       if (msg.method === 'switch') {
@@ -68,6 +70,16 @@ async function handleExtMessage(msg, sender) {
   return { ok: false, error: 'Unknown cmd: ' + msg.cmd };
 }
 
+function handleStatus() {
+  return {
+    ok: true,
+    data: {
+      wsConnected: !!ws && ws.readyState === WebSocket.OPEN,
+      wsUrl: WS_URL
+    }
+  };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleExtMessage(msg, sender).then(sendResponse);
   return true;
@@ -91,6 +103,25 @@ async function handleCookies(msg, sender) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+async function handleOpenTab(msg) {
+  try {
+    const url = normalizeOpenUrl(msg.url);
+    const active = msg.active !== false;
+    const tab = await chrome.tabs.create({ url, active });
+    if (active && tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    return { ok: true, data: { id: tab.id, url: tab.url || url, title: tab.title || '', active: tab.active, windowId: tab.windowId } };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function normalizeOpenUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) throw new Error('url is required');
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return raw;
+  return 'https://' + raw;
 }
 
 async function handleBatch(msg, sender) {

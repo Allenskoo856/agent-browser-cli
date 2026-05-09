@@ -30,7 +30,7 @@ assets/tmwd_cdp_bridge
 扩展配置必须存在：
 
 ```js
-const TID = '__ljq_15d3f8';
+const TID = '__agent_browser_cli_bridge_26c9f1';
 ```
 
 对应文件：
@@ -86,6 +86,7 @@ cd /path/to/agent-browser-cli
 .venv/bin/python agent_browser_cli.py tabs
 .venv/bin/python agent_browser_cli.py scan --tabs-only
 .venv/bin/python agent_browser_cli.py scan --tab 303987837 --text-only
+.venv/bin/python agent_browser_cli.py open https://www.baidu.com
 .venv/bin/python agent_browser_cli.py exec --tab 303987837 'return document.title'
 .venv/bin/python agent_browser_cli.py exec --tab 303987837 '{"cmd":"tabs"}'
 .venv/bin/python agent_browser_cli.py restart
@@ -146,6 +147,13 @@ import ga
 print(ga.web_execute_js("location.href='https://example.com'; return location.href"))
 ```
 
+新开标签页优先使用原生 `open` 命令，不要用 `window.open` 加 `--monitor`。`open` 底层走扩展 `chrome.tabs.create`，不会触发 CDP debugger attach。
+
+```bash
+.venv/bin/python agent_browser_cli.py open www.baidu.com
+.venv/bin/python agent_browser_cli.py new-tab https://example.com --background
+```
+
 JS 事件的 `isTrusted=false`，敏感操作可能被页面拦截。JS 点击按钮打不开新 tab 时，优先改用 CDP 点击。
 
 ## 扩展 JSON 指令
@@ -163,6 +171,7 @@ print(ga.web_execute_js('{"cmd":"batch","tabId":303987837,"commands":[{"cmd":"ta
 
 常用命令：
 - `{"cmd":"tabs"}`：读取或切换标签页。
+- `{"cmd":"openTab","url":"https://example.com","active":true}`：原生创建标签页。
 - `{"cmd":"cookies"}`：读取当前页 Cookie。
 - `{"cmd":"cdp","tabId":N,"method":"...","params":{}}`：执行单个 CDP 命令。
 - `{"cmd":"batch","tabId":N,"commands":[...]}`：同一链路内批量执行，支持 `$N.path` 引用前序结果。

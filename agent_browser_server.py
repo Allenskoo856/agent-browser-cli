@@ -226,6 +226,14 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send(_response(True, result=result))
                 return
+            if self.path == "/open":
+                result = ga.web_open_tab(
+                    payload.get("url", ""),
+                    active=bool(payload.get("active", True)),
+                    switch_tab_id=payload.get("switch_tab_id"),
+                )
+                self._send(_response(True, result=result))
+                return
             if self.path == "/shutdown":
                 shutdown_requested = True
                 self._send(_response(True, status="shutdown_requested"))

@@ -184,6 +184,11 @@ def web_execute_js(script, switch_tab_id=None, no_monitor=False):
         return result
     except Exception as e: return {"status": "error", "msg": format_error(e)}
 
+def web_open_tab(url, active=True, switch_tab_id=None):
+    """通过浏览器扩展原生创建新标签页，避免 window.open 和 CDP 调试器冲突。"""
+    payload = json.dumps({"cmd": "openTab", "url": url, "active": active}, ensure_ascii=False)
+    return web_execute_js(payload, switch_tab_id=switch_tab_id, no_monitor=True)
+
 def expand_file_refs(text, base_dir=None):
     """展开文本中的 {{file:路径:起始行:结束行}} 引用为实际文件内容。
     可与普通文本混排。展开失败抛 ValueError。

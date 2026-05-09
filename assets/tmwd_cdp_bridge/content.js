@@ -9,7 +9,7 @@ document.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').forEach(
 (function(){
   if(window.self!==window.top)return;
   const d=document.createElement('div');
-  d.id='ljq-ind';
+  d.id='agent-browser-cli-ind';
   d.style.cssText='position:fixed;bottom:8px;right:8px;color:white;padding:4px 7px;border-radius:4px;font-size:11px;font-weight:bold;z-index:99999;cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,0.2);opacity:0.5;';
   /**
    * Show the badge only when the bridge is really connected.
@@ -17,7 +17,7 @@ document.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').forEach(
   function setBadgeState(connected, detail) {
     // Hide the indicator completely when offline to avoid persistent page noise.
     d.style.display = connected ? 'block' : 'none';
-    d.innerText = 'ljq_driver: 已连接';
+    d.innerText = 'agent_browser_cli: 已连接';
     d.style.background = '#4CAF50';
     d.dataset.connected = connected ? '1' : '0';
     d.dataset.detail = detail || '';
@@ -66,6 +66,8 @@ async function handle(el) {
       resp = await chrome.runtime.sendMessage({ cmd: 'batch', commands: req.commands, tabId: req.tabId });
     } else if (cmd === 'tabs') {
       resp = await chrome.runtime.sendMessage({ cmd: 'tabs', method: req.method, tabId: req.tabId });
+    } else if (cmd === 'openTab') {
+      resp = await chrome.runtime.sendMessage({ cmd: 'openTab', url: req.url, active: req.active });
     } else {
       resp = { ok: false, error: 'unknown cmd: ' + cmd };
     }

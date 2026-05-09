@@ -137,6 +137,21 @@ def cmd_exec(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_open(args: argparse.Namespace) -> None:
+    ensure_server()
+    print_json(
+        _request(
+            "/open",
+            {
+                "url": args.url,
+                "active": not args.background,
+                "switch_tab_id": args.tab,
+            },
+            timeout=args.timeout,
+        )
+    )
+
+
 def cmd_stop(_: argparse.Namespace) -> None:
     if not _is_server_alive():
         print_json({"ok": True, "status": "not_running"})
@@ -199,6 +214,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wait-interval", type=float, default=0.1, help="wait-js 轮询间隔秒数")
     p.add_argument("--timeout", type=float, default=60)
     p.set_defaults(func=cmd_exec)
+
+    p = sub.add_parser("open", aliases=["new-tab"], help="原生新开标签页访问 URL")
+    p.add_argument("url", help="要打开的 URL，省略协议时默认补 https://")
+    p.add_argument("--background", action="store_true", help="后台打开，不激活新标签页")
+    p.add_argument("--tab", help="通过指定现有 tab 注入扩展指令")
+    p.add_argument("--timeout", type=float, default=30)
+    p.set_defaults(func=cmd_open)
 
     p = sub.add_parser("status", help="查看常驻服务状态")
     p.set_defaults(func=cmd_status)

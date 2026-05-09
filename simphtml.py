@@ -5,7 +5,7 @@ js_optHTML = r'''function optHTML(text_only=false) {
 function createEnhancedDOMCopy() {  
   const nodeInfo = new WeakMap();  
   const ignoreTags = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'META', 'LINK', 'COLGROUP', 'COL', 'TEMPLATE', 'PARAM', 'SOURCE'];  
-  const ignoreIds = ['ljq-ind'];  
+  const ignoreIds = ['agent-browser-cli-ind'];
   function cloneNode(sourceNode, keep=false) {  
     if (sourceNode.nodeType === 8 ||   
         (sourceNode.nodeType === 1 && (  

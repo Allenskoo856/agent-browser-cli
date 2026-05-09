@@ -88,6 +88,7 @@ Chrome 需要至少打开一个正常网页标签页，不要只停留在 `about
 
 ```bash
 .venv/bin/python agent_browser_cli.py tabs
+.venv/bin/python agent_browser_cli.py open https://www.baidu.com
 ```
 
 成功时会返回：
@@ -121,6 +122,12 @@ git pull
 ```
 
 如果 Chrome 扩展有更新，在 `chrome://extensions` 中重新加载 `assets/tmwd_cdp_bridge` 扩展。
+
+当前扩展配置标识为：
+
+```js
+const TID = '__agent_browser_cli_bridge_26c9f1';
+```
 
 如果你把 skill 安装到了 Codex/Agent 的全局目录，更新后同步复制：
 

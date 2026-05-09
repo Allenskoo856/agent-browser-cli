@@ -88,6 +88,7 @@ Chrome needs at least one normal web page tab open. Do not leave it only on `abo
 
 ```bash
 .venv/bin/python agent_browser_cli.py tabs
+.venv/bin/python agent_browser_cli.py open https://www.baidu.com
 ```
 
 On success, it returns:
@@ -121,6 +122,12 @@ git pull
 ```
 
 If the Chrome extension has updates, reload the `assets/tmwd_cdp_bridge` extension in `chrome://extensions`.
+
+Current extension bridge identifier:
+
+```js
+const TID = '__agent_browser_cli_bridge_26c9f1';
+```
 
 If you installed the skill into a global Codex/Agent directory, copy it again after updating:
 

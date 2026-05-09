@@ -10,9 +10,10 @@
 2. 校验 Python 版本，要求 Python >= 3.10。
 3. 在项目目录创建 .venv 虚拟环境，并安装 requirements.txt。
 4. 指导我在 Chrome 中加载 assets/tmwd_cdp_bridge 解压扩展。
-5. 将 skills/agent-browser-cli/SKILL.md 安装到当前 AI 可识别的 skills 目录。
-6. 执行 agent_browser_cli.py tabs 和 status 验证可用。
-7. 如果已经安装过 GenericAgent 的 tmwd_cdp_bridge 扩展，可以复用，但必须验证 tabs 能正常返回。
+5. 如果之前已经加载过扩展，必须在 chrome://extensions 里重新加载 `assets/tmwd_cdp_bridge`，确保最新 `config.js` 和 `background.js` 生效。
+6. 将 skills/agent-browser-cli/SKILL.md 安装到当前 AI 可识别的 skills 目录。
+7. 执行 agent_browser_cli.py tabs、open 和 status 验证可用。
+8. 如果已经安装过旧版 GenericAgent 的 tmwd_cdp_bridge 扩展，不要直接复用旧扩展；必须确认扩展目录来自当前项目并已重新加载。
 ```
 
 ## 1. 确认项目目录
@@ -76,7 +77,13 @@ chrome://extensions
 assets/tmwd_cdp_bridge
 ```
 
-如果之前已经安装过 GenericAgent 的 `tmwd_cdp_bridge` 扩展，可以复用同一个扩展，不需要重复加载。
+如果之前已经安装过旧版 GenericAgent 的 `tmwd_cdp_bridge` 扩展，不要直接复用旧扩展。当前项目需要加载 `assets/tmwd_cdp_bridge`，并在每次扩展代码更新后点击“重新加载”。
+
+当前扩展配置应包含：
+
+```js
+const TID = '__agent_browser_cli_bridge_26c9f1';
+```
 
 Chrome 至少需要打开一个正常网页标签页，不要只停留在 `about:blank` 或 `chrome://` 页面。
 
@@ -104,10 +111,12 @@ cp skills/agent-browser-cli/SKILL.md ~/.codex/skills/agent-browser-cli/SKILL.md
 
 ```bash
 .venv/bin/python agent_browser_cli.py tabs
+.venv/bin/python agent_browser_cli.py open https://www.baidu.com
 .venv/bin/python agent_browser_cli.py status
 ```
 
 成功时，`tabs` 会返回 `ok: true`，并包含当前 Chrome 标签页数量。
+`open` 应能原生新开标签页，不应使用 `exec --monitor` 或 `window.open` 代替。
 
 如果常驻服务需要重载最新代码：
 
