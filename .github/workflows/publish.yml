@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm
@@ -64,6 +64,13 @@ jobs:
 
       - name: Stage platform package
         run: node scripts/package-platform.mjs ${{ matrix.name }} target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+      - name: Pack platform package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          npm pack "npm/platform/${{ matrix.name }}" --pack-destination dist/npm
 
       - name: Publish platform package
         shell: bash
@@ -81,6 +88,18 @@ jobs:
           fi
           exit 1
 
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-cli-${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.name }}
+          path: dist/npm/*.tgz
+
   publish-main:
     name: Publish main package
     runs-on: ubuntu-latest
@@ -93,7 +112,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm
@@ -113,3 +132,71 @@ jobs:
             exit 0
           fi
           exit 1
+
+  github-release:
+    name: GitHub Release
+    needs: publish-binaries
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agent-browser-cli-*
+          path: dist/bin
+          merge-multiple: true
+
+      - name: Download npm package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: dist/npm
+          merge-multiple: true
+
+      - name: Package Chrome extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/extension
+          cp -R assets/tmwd_cdp_bridge dist/extension/tmwd_cdp_bridge
+          (cd dist/extension && zip -r ../chrome-extensions.zip tmwd_cdp_bridge)
+
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t npm_packages < <(find dist/npm -type f -name '*.tgz' | sort)
+          extension_package="dist/chrome-extensions.zip"
+          TAG_MESSAGE="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" | sed '/-----BEGIN PGP SIGNATURE-----/,$d' | sed '${/^$/d;}')"
+          DEFAULT_NOTES="Rust/npm native release for macOS, Linux, and Windows."
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            EXISTING_NOTES="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""')"
+            if [ -n "${TAG_MESSAGE}" ] && ! grep -Fq "${TAG_MESSAGE}" <<<"${EXISTING_NOTES}"; then
+              {
+                printf '%s\n' "${EXISTING_NOTES}"
+                [ -n "${EXISTING_NOTES}" ] && printf '\n'
+                printf '%s\n' "${TAG_MESSAGE}"
+              } > release-notes.md
+              gh release edit "${GITHUB_REF_NAME}" dist/bin/* "${npm_packages[@]}" "${extension_package}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --notes-file release-notes.md
+            else
+              gh release edit "${GITHUB_REF_NAME}" dist/bin/* "${npm_packages[@]}" "${extension_package}" \
+                --repo "${GITHUB_REPOSITORY}"
+            fi
+          else
+            if [ -n "${TAG_MESSAGE}" ]; then
+              printf '%s\n' "${TAG_MESSAGE}" > release-notes.md
+            else
+              printf '%s\n' "${DEFAULT_NOTES}" > release-notes.md
+            fi
+            gh release create "${GITHUB_REF_NAME}" dist/bin/* "${npm_packages[@]}" "${extension_package}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md
+          fi
