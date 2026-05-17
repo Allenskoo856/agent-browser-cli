@@ -43,8 +43,13 @@ agent-browser-cli status
 agent-browser-cli doctor
 agent-browser-cli logs --tail 100
 agent-browser-cli tabs
+agent-browser-cli tabs --profile work
 agent-browser-cli scan --tabs-only
-agent-browser-cli scan --tab <tabId> --text-only
+agent-browser-cli scan --profile work --tab <tabId> --text-only
+agent-browser-cli open --profile work https://example.com
+agent-browser-cli open --window https://example.com
+agent-browser-cli open --window --focus https://example.com
+# open 返回后继续操作新页面时，优先使用 result.opened_tab_id / result.opened_session_key
 agent-browser-cli open https://example.com
 agent-browser-cli close --tab <tabId>
 agent-browser-cli exec --tab <tabId> 'return document.title'
@@ -76,7 +81,7 @@ agent-browser-cli send-keys --target '@e2' 'Enter'
 agent-browser-cli mouse-click '@e3'
 ```
 
-所有高层操作都支持 `--tab <tabId>`；`@e` 只在当前 daemon、当前 tab、最近一次 `snapshot` 内有效。`@e` 只接受 `@e1` 这种带 `@` 的格式。
+所有高层操作都支持 `--tab <tabId>`，多 Chrome Profile / 多浏览器实例时还支持 `--profile <profile_id-or-label>` 和 `--browser <browser_id>`。`tabs` 输出会包含 `browser_id`、`profile_id`、`profile_label`、`tab_id`、`session_key`。只传 `--tab` 且存在歧义时，必须补 `--profile` 或 `--browser`，不要猜。`@e` 只在当前 daemon、当前 session_key、最近一次 `snapshot` 内有效。`@e` 只接受 `@e1` 这种带 `@` 的格式。
 
 慢页面要把等待和监控分开：
 
@@ -139,12 +144,14 @@ agent-browser-cli console stop --tab <tabId>
 
 ## 标签分组
 
-多任务开新标签时可以用 session 或 group-title 把标签放入 Chrome 原生标签组。分组只是整理浏览器标签，失败不影响开 tab 主流程。
+多任务开新标签时可以用 session 或 group-title 把标签放入 Chrome 原生标签组。需要独立窗口时用 `open --window`；默认不聚焦，需要抢焦点时显式加 `--focus`；`--window --group-title` / `--window --session` 会把新窗口里的首个 tab 加入对应 tab group。分组只是整理浏览器标签，失败不影响开 tab 主流程。
 
 ```bash
 agent-browser-cli open https://example.com --session research
-agent-browser-cli open https://example.com
-agent-browser-cli close --tab <tabId> --group-title "任务A"
+agent-browser-cli open https://example.com --group-title "任务A"
+agent-browser-cli open --window https://example.com
+agent-browser-cli open --window --focus https://example.com
+agent-browser-cli open --profile work https://example.com
 ```
 
 `--session` 和 `--group-title` 都会作为标签组标题；两者同时传时优先使用 `--group-title`。

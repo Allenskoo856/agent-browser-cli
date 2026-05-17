@@ -5,7 +5,7 @@ use crate::protocol::{
 use crate::{config, html};
 use anyhow::{anyhow, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -43,6 +43,8 @@ struct ScanRequest {
     #[serde(default)]
     tabs_only: bool,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     text_only: bool,
 }
@@ -52,6 +54,8 @@ struct ExecRequest {
     #[serde(default)]
     script: String,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     no_monitor: bool,
     wait_js: Option<String>,
@@ -67,18 +71,28 @@ struct OpenRequest {
     #[serde(default = "default_active")]
     active: bool,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     session: Option<String>,
     group_title: Option<String>,
+    #[serde(default)]
+    window: bool,
+    #[serde(default)]
+    allow_focus: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct CloseRequest {
     tab_id: String,
+    browser: Option<String>,
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SnapshotRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_snapshot_limit")]
@@ -93,6 +107,8 @@ struct SnapshotRequest {
 struct TargetActionRequest {
     target: String,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     monitor: bool,
     wait_js: Option<String>,
@@ -110,6 +126,8 @@ struct FillRequest {
     #[serde(default)]
     value: String,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     append: bool,
     #[serde(default)]
@@ -132,6 +150,8 @@ struct SendKeysRequest {
     keys: String,
     target: Option<String>,
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     #[serde(default)]
     monitor: bool,
     wait_js: Option<String>,
@@ -146,6 +166,8 @@ struct SendKeysRequest {
 #[derive(Debug, Deserialize)]
 struct ScreenshotRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     target: Option<String>,
     selector: Option<String>,
     out: Option<PathBuf>,
@@ -161,6 +183,8 @@ struct ScreenshotRequest {
 #[derive(Debug, Deserialize)]
 struct SavePdfRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     out: Option<PathBuf>,
     #[serde(default = "default_pdf_paper")]
     paper: String,
@@ -174,14 +198,24 @@ struct SavePdfRequest {
     timeout: f64,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct TabsQuery {
+    browser: Option<String>,
+    profile: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct TabRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NetworkListRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     filter: Option<String>,
     #[serde(default = "default_debug_list_limit")]
     limit: usize,
@@ -190,12 +224,16 @@ struct NetworkListRequest {
 #[derive(Debug, Deserialize)]
 struct NetworkDetailRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     request_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ConsoleListRequest {
     switch_tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
     level: Option<String>,
     #[serde(default = "default_debug_list_limit")]
     limit: usize,
@@ -239,6 +277,23 @@ fn default_true() -> bool {
 
 fn default_debug_list_limit() -> usize {
     100
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionSelector {
+    tab_id: Option<String>,
+    browser: Option<String>,
+    profile: Option<String>,
+}
+
+impl SessionSelector {
+    fn new(tab_id: Option<String>, browser: Option<String>, profile: Option<String>) -> Self {
+        Self {
+            tab_id,
+            browser,
+            profile,
+        }
+    }
 }
 
 pub async fn run_daemon() -> Result<()> {
@@ -375,28 +430,53 @@ async fn handle_ws_message(
 ) {
     let mut driver = state.driver.lock().await;
     match incoming {
-        WsIncoming::ExtReady { tabs } | WsIncoming::TabsUpdate { tabs } => {
+        WsIncoming::ExtReady {
+            browser_id,
+            profile_id,
+            profile_label,
+            tabs,
+        }
+        | WsIncoming::TabsUpdate {
+            browser_id,
+            profile_id,
+            profile_label,
+            tabs,
+        } => {
             let current: std::collections::HashSet<String> = tabs
                 .iter()
-                .map(|t| t.id.to_string().trim_matches('"').to_string())
+                .map(|t| {
+                    let tab_id = t.id.to_string().trim_matches('"').to_string();
+                    crate::protocol::make_session_key(&browser_id, &profile_id, &tab_id)
+                })
                 .collect();
             for session in driver.sessions.values_mut() {
-                if session.info.tab_type == "ext_ws" && !current.contains(&session.info.id) {
+                if session.info.tab_type == "ext_ws"
+                    && session.browser_id == browser_id
+                    && session.profile_id == profile_id
+                    && !current.contains(&session.session_key)
+                {
                     session.disconnected_at = Some(Instant::now());
                 }
             }
             for tab in tabs {
-                let info = tab.into_tab_info();
-                if !registered_ids.contains(&info.id) {
-                    registered_ids.push(info.id.clone());
+                let info = tab.into_tab_info(&browser_id, &profile_id, profile_label.clone());
+                let session_key = info.session_key.clone();
+                let tab_id = info.tab_id.clone();
+                if !registered_ids.contains(&session_key) {
+                    registered_ids.push(session_key.clone());
                 }
-                driver.latest_session_id = Some(info.id.clone());
-                if driver.default_session_id.is_none() {
-                    driver.default_session_id = Some(info.id.clone());
+                driver.latest_session_key = Some(session_key.clone());
+                if driver.default_session_key.is_none() {
+                    driver.default_session_key = Some(session_key.clone());
                 }
                 driver.sessions.insert(
-                    info.id.clone(),
+                    session_key.clone(),
                     Session {
+                        session_key,
+                        tab_id,
+                        browser_id: browser_id.clone(),
+                        profile_id: profile_id.clone(),
+                        profile_label: profile_label.clone(),
                         info,
                         sender: sender.clone(),
                         disconnected_at: None,
@@ -487,9 +567,15 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-async fn tabs(State(state): State<AppState>) -> Json<Value> {
+async fn tabs(State(state): State<AppState>, Query(query): Query<TabsQuery>) -> Json<Value> {
     touch(&state).await;
-    let tabs = active_tabs(&state, true).await;
+    let tabs = active_tabs_filtered(
+        &state,
+        true,
+        query.browser.as_deref(),
+        query.profile.as_deref(),
+    )
+    .await;
     Json(
         json!({ "ok": true, "result": { "status": "success", "metadata": { "tabs_count": tabs.len(), "tabs": tabs } } }),
     )
@@ -497,7 +583,13 @@ async fn tabs(State(state): State<AppState>) -> Json<Value> {
 
 async fn scan(State(state): State<AppState>, Json(req): Json<ScanRequest>) -> Json<Value> {
     touch(&state).await;
-    let result = scan_page(&state, req.tabs_only, req.switch_tab_id, req.text_only).await;
+    let result = scan_page(
+        &state,
+        req.tabs_only,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        req.text_only,
+    )
+    .await;
     Json(match result {
         Ok(value) => json!({ "ok": true, "result": value }),
         Err(err) => json!({ "ok": false, "error": err.to_string() }),
@@ -516,7 +608,13 @@ async fn exec(State(state): State<AppState>, Json(req): Json<ExecRequest>) -> Js
     } else {
         req.script.clone()
     };
-    let result = execute_page_js(&state, &script, req.switch_tab_id, req.no_monitor).await;
+    let result = execute_page_js(
+        &state,
+        &script,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        req.no_monitor,
+    )
+    .await;
     Json(match result {
         Ok(value) => {
             json!({ "ok": true, "result": value, "combined_wait": req.wait_js.is_some() && !is_extension_json(&req.script) })
@@ -532,37 +630,122 @@ async fn open_tab(State(state): State<AppState>, Json(req): Json<OpenRequest>) -
         "cmd": "openTab",
         "url": normalize_url(&req.url),
         "active": req.active,
+        "window": req.window,
+        "allowFocus": req.allow_focus,
         "groupTitle": group_title,
     })
     .to_string();
-    let result = execute_page_js(&state, &payload, req.switch_tab_id, true).await;
+    let result = execute_page_js(
+        &state,
+        &payload,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        true,
+    )
+    .await;
     Json(match result {
-        Ok(value) => json!({ "ok": true, "result": value }),
+        Ok(value) => json!({ "ok": true, "result": normalize_open_result(&state, value).await }),
         Err(err) => json!({ "ok": false, "error": err.to_string() }),
     })
 }
 
+async fn normalize_open_result(state: &AppState, value: Value) -> Value {
+    let opened = value.get("js_return").cloned().unwrap_or(Value::Null);
+    let opened_tab_id = opened.get("id").and_then(|v| {
+        v.as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| v.as_str().map(str::to_string))
+    });
+    let executor_session_key = value
+        .get("session_key")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let opened_session_key = if let Some(tab_id) = opened_tab_id.as_deref() {
+        find_session_key_by_tab_id(state, tab_id).await.or_else(|| {
+            executor_session_key
+                .as_deref()
+                .and_then(|key| derive_session_key(key, tab_id))
+        })
+    } else {
+        None
+    };
+    json!({
+        "status": "success",
+        "opened_tab_id": opened_tab_id,
+        "opened_session_key": opened_session_key,
+        "window_id": opened.get("windowId").cloned().unwrap_or(Value::Null),
+        "window": opened.get("window").and_then(Value::as_bool).unwrap_or(false),
+        "url": opened.get("url").cloned().unwrap_or(Value::Null),
+        "title": opened.get("title").cloned().unwrap_or(Value::Null),
+        "active": opened.get("active").cloned().unwrap_or(Value::Null),
+        "group": opened.get("group").cloned().unwrap_or(Value::Null),
+        "metadata": {
+            "executor": {
+                "tab_id": value.get("tab_id").cloned().unwrap_or(Value::Null),
+                "session_key": value.get("session_key").cloned().unwrap_or(Value::Null)
+            },
+            "raw": opened
+        }
+    })
+}
+
+async fn find_session_key_by_tab_id(state: &AppState, tab_id: &str) -> Option<String> {
+    let driver = state.driver.lock().await;
+    driver
+        .sessions
+        .values()
+        .find(|session| session.is_active() && session.tab_id == tab_id)
+        .map(|session| session.session_key.clone())
+}
+
+fn derive_session_key(executor_session_key: &str, opened_tab_id: &str) -> Option<String> {
+    let mut parts = executor_session_key.splitn(3, ':');
+    let browser_id = parts.next()?;
+    let profile_id = parts.next()?;
+    Some(crate::protocol::make_session_key(
+        browser_id,
+        profile_id,
+        opened_tab_id,
+    ))
+}
+
 async fn close(State(state): State<AppState>, Json(req): Json<CloseRequest>) -> Json<Value> {
     touch(&state).await;
-    let tab_id = req.tab_id;
+    let selector = SessionSelector::new(Some(req.tab_id), req.browser, req.profile);
+    let session_key = match select_tab(&state, selector).await {
+        Ok(value) => value,
+        Err(err) => return Json(json!({ "ok": false, "error": err.to_string() })),
+    };
+    let physical_tab_id = match session_tab_id(&state, &session_key).await {
+        Ok(value) => value,
+        Err(err) => return Json(json!({ "ok": false, "error": err.to_string() })),
+    };
     let payload = json!({
         "cmd": "closeTab",
-        "tabId": tab_id.parse::<i64>().unwrap_or_default(),
+        "tabId": physical_tab_id.parse::<i64>().unwrap_or_default(),
     })
     .to_string();
-    let result = execute_page_js(&state, &payload, Some(tab_id.clone()), true).await;
+    let result = execute_page_js(
+        &state,
+        &payload,
+        SessionSelector::new(Some(session_key.clone()), None, None),
+        true,
+    )
+    .await;
     {
         let mut driver = state.driver.lock().await;
-        driver.sessions.remove(&tab_id);
-        driver.snapshots.remove(&tab_id);
+        driver.sessions.remove(&session_key);
+        driver.snapshots.remove(&session_key);
         driver
             .active_exec_sessions
-            .retain(|_, session_id| session_id != &tab_id);
-        if driver.default_session_id.as_deref() == Some(&tab_id) {
-            driver.default_session_id = driver.latest_session_id.clone().filter(|id| id != &tab_id);
+            .retain(|_, active_session_key| active_session_key != &session_key);
+        if driver.default_session_key.as_deref() == Some(&session_key) {
+            driver.default_session_key = driver
+                .latest_session_key
+                .clone()
+                .filter(|id| id != &session_key);
         }
-        if driver.latest_session_id.as_deref() == Some(&tab_id) {
-            driver.latest_session_id = None;
+        if driver.latest_session_key.as_deref() == Some(&session_key) {
+            driver.latest_session_key = None;
         }
     }
     Json(match result {
@@ -588,11 +771,11 @@ async fn cleanup_on_shutdown(state: &AppState) -> Value {
         let snapshot_count = driver.snapshots.len();
         let pending_count = driver.pending.len();
         let active_exec_count = driver.active_exec_sessions.len();
-        let sessions: Vec<(String, tokio::sync::mpsc::UnboundedSender<String>)> = driver
+        let sessions: Vec<(String, String, tokio::sync::mpsc::UnboundedSender<String>)> = driver
             .sessions
             .iter()
             .filter(|(_, session)| session.is_active())
-            .map(|(id, session)| (id.clone(), session.sender.clone()))
+            .map(|(key, session)| (key.clone(), session.tab_id.clone(), session.sender.clone()))
             .collect();
         driver.snapshots.clear();
         driver.pending.clear();
@@ -602,7 +785,7 @@ async fn cleanup_on_shutdown(state: &AppState) -> Value {
     };
 
     let mut plugin_results = Vec::new();
-    for (tab_id, sender) in sessions {
+    for (session_key, tab_id, sender) in sessions {
         let exec_id = uuid::Uuid::new_v4().to_string();
         let payload = json!({
             "id": exec_id,
@@ -611,7 +794,7 @@ async fn cleanup_on_shutdown(state: &AppState) -> Value {
         })
         .to_string();
         let ok = sender.send(payload).is_ok();
-        plugin_results.push(json!({ "tab_id": tab_id, "sent": ok }));
+        plugin_results.push(json!({ "session_key": session_key, "tab_id": tab_id, "sent": ok }));
     }
 
     json!({
@@ -627,6 +810,15 @@ async fn cleanup_on_shutdown(state: &AppState) -> Value {
 }
 
 async fn active_tabs(state: &AppState, wait_ready: bool) -> Vec<TabInfo> {
+    active_tabs_filtered(state, wait_ready, None, None).await
+}
+
+async fn active_tabs_filtered(
+    state: &AppState,
+    wait_ready: bool,
+    browser: Option<&str>,
+    profile: Option<&str>,
+) -> Vec<TabInfo> {
     if wait_ready {
         wait_for_sessions(state, Duration::from_secs(5)).await;
     }
@@ -635,6 +827,12 @@ async fn active_tabs(state: &AppState, wait_ready: bool) -> Vec<TabInfo> {
         .sessions
         .values()
         .filter(|s| s.is_active())
+        .filter(|s| browser.map(|b| s.browser_id == b).unwrap_or(true))
+        .filter(|s| {
+            profile
+                .map(|p| s.profile_id == p || s.profile_label.as_deref() == Some(p))
+                .unwrap_or(true)
+        })
         .map(|s| {
             let mut info = s.info.clone();
             if info.url.len() > 50 {
@@ -687,11 +885,12 @@ async fn has_active_sessions(state: &AppState) -> bool {
 async fn scan_page(
     state: &AppState,
     tabs_only: bool,
-    switch_tab_id: Option<String>,
+    selector: SessionSelector,
     text_only: bool,
 ) -> Result<Value> {
-    if let Some(tab_id) = switch_tab_id {
-        state.driver.lock().await.default_session_id = Some(tab_id);
+    if selector.tab_id.is_some() || selector.browser.is_some() || selector.profile.is_some() {
+        let session_key = select_tab(state, selector.clone()).await?;
+        state.driver.lock().await.default_session_key = Some(session_key);
     }
     let tabs = active_tabs(state, true).await;
     if tabs.is_empty() {
@@ -699,13 +898,13 @@ async fn scan_page(
             json!({ "status": "error", "msg": "没有可用的浏览器标签页，查L3记忆分析原因。" }),
         );
     }
-    let default_session_id = state.driver.lock().await.default_session_id.clone();
+    let default_session_key = state.driver.lock().await.default_session_key.clone();
     let mut result = json!({
         "status": "success",
         "metadata": {
             "tabs_count": tabs.len(),
             "tabs": tabs,
-            "active_tab": default_session_id,
+            "active_tab": default_session_key,
         }
     });
     if !tabs_only {
@@ -718,11 +917,12 @@ async fn scan_page(
 async fn execute_page_js(
     state: &AppState,
     script: &str,
-    switch_tab_id: Option<String>,
+    selector: SessionSelector,
     no_monitor: bool,
 ) -> Result<Value> {
-    if let Some(tab_id) = switch_tab_id {
-        state.driver.lock().await.default_session_id = Some(tab_id);
+    if selector.tab_id.is_some() || selector.browser.is_some() || selector.profile.is_some() {
+        let session_key = select_tab(state, selector.clone()).await?;
+        state.driver.lock().await.default_session_key = Some(session_key);
     }
     let before = if no_monitor {
         None
@@ -732,13 +932,20 @@ async fn execute_page_js(
     let before_tabs: std::collections::HashSet<String> = active_tabs(state, true)
         .await
         .into_iter()
-        .map(|t| t.id)
+        .map(|t| t.session_key)
         .collect();
     let response = execute_raw_js(state, script, Duration::from_secs(15)).await?;
+    let current_session_key = state.driver.lock().await.default_session_key.clone();
+    let current_tab_id = if let Some(key) = current_session_key.as_deref() {
+        session_tab_id(state, key).await.ok()
+    } else {
+        None
+    };
     let mut result = json!({
         "status": "success",
         "js_return": response.data.or(response.result).unwrap_or(Value::Null),
-        "tab_id": state.driver.lock().await.default_session_id,
+        "tab_id": current_tab_id,
+        "session_key": current_session_key,
     });
     if let Some(tabs) = response.new_tabs {
         result["newTabs"] = tabs;
@@ -746,8 +953,8 @@ async fn execute_page_js(
         let after_tabs = active_tabs(state, false).await;
         let new_tabs: Vec<_> = after_tabs
             .into_iter()
-            .filter(|t| !before_tabs.contains(&t.id))
-            .map(|t| json!({ "id": t.id, "url": t.url }))
+            .filter(|t| !before_tabs.contains(&t.session_key))
+            .map(|t| json!({ "id": t.id, "tab_id": t.tab_id, "session_key": t.session_key, "url": t.url }))
             .collect();
         if !new_tabs.is_empty() {
             result["newTabs"] = json!(new_tabs);
@@ -764,23 +971,47 @@ async fn execute_page_js(
 }
 
 async fn execute_raw_js(state: &AppState, code: &str, timeout: Duration) -> Result<ExecResult> {
-    let (session_id, sender) = {
+    let (session_key, tab_id, sender) = {
         wait_for_sessions(state, Duration::from_secs(5)).await;
         let driver = state.driver.lock().await;
-        let session_id = driver
-            .default_session_id
-            .clone()
-            .or_else(|| driver.latest_session_id.clone())
+        let session_key = driver
+            .default_session_key
+            .as_ref()
+            .and_then(|key| {
+                driver
+                    .sessions
+                    .get(key)
+                    .filter(|s| s.is_active())
+                    .map(|s| s.session_key.clone())
+            })
+            .or_else(|| {
+                driver.latest_session_key.as_ref().and_then(|key| {
+                    driver
+                        .sessions
+                        .get(key)
+                        .filter(|s| s.is_active())
+                        .map(|s| s.session_key.clone())
+                })
+            })
+            .or_else(|| {
+                driver
+                    .sessions
+                    .values()
+                    .find(|s| s.is_active())
+                    .map(|s| s.session_key.clone())
+            })
             .ok_or_else(|| anyhow!("没有可用的浏览器标签页，查L3记忆分析原因。"))?;
         let session = driver
             .sessions
-            .get(&session_id)
+            .get(&session_key)
             .filter(|s| s.is_active())
-            .ok_or_else(|| anyhow!("会话ID {session_id} 未连接"))?;
-        (session_id, session.sender.clone())
+            .ok_or_else(|| anyhow!("会话ID {session_key} 未连接"))?;
+        (session_key, session.tab_id.clone(), session.sender.clone())
     };
     let exec_id = Uuid::new_v4().to_string();
-    let payload = json!({ "id": exec_id, "code": code, "tabId": session_id.parse::<i64>().unwrap_or_default() }).to_string();
+    let payload =
+        json!({ "id": exec_id, "code": code, "tabId": tab_id.parse::<i64>().unwrap_or_default() })
+            .to_string();
     let (tx, rx) = oneshot::channel();
     {
         let mut driver = state.driver.lock().await;
@@ -793,7 +1024,7 @@ async fn execute_raw_js(state: &AppState, code: &str, timeout: Duration) -> Resu
         );
         driver
             .active_exec_sessions
-            .insert(exec_id.clone(), session_id.clone());
+            .insert(exec_id.clone(), session_key.clone());
     }
     sender
         .send(payload)
@@ -1018,7 +1249,7 @@ async fn click(State(state): State<AppState>, Json(req): Json<TargetActionReques
         match run_target_operation(
             &state,
             OperationKind::Click,
-            req.switch_tab_id,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
             &req.target,
             None,
             options,
@@ -1057,7 +1288,7 @@ async fn fill(State(state): State<AppState>, Json(req): Json<FillRequest>) -> Js
         match run_target_operation(
             &state,
             OperationKind::Fill,
-            req.switch_tab_id,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
             &req.target,
             Some(payload),
             options,
@@ -1086,7 +1317,7 @@ async fn mouse_click(
         match run_target_operation(
             &state,
             OperationKind::MouseClick,
-            req.switch_tab_id,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
             &req.target,
             None,
             options,
@@ -1110,7 +1341,14 @@ async fn send_keys(State(state): State<AppState>, Json(req): Json<SendKeysReques
     };
     let payload = json!({ "keys": req.keys, "target": req.target });
     Json(
-        match run_send_keys_operation(&state, req.switch_tab_id, payload, options).await {
+        match run_send_keys_operation(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+            payload,
+            options,
+        )
+        .await
+        {
             Ok(value) => json!({ "ok": true, "result": value }),
             Err(err) => json!({ "ok": false, "error": err.to_string() }),
         },
@@ -1119,12 +1357,16 @@ async fn send_keys(State(state): State<AppState>, Json(req): Json<SendKeysReques
 
 async fn snapshot_page(state: &AppState, req: SnapshotRequest) -> Result<Value> {
     let limit = req.limit.clamp(1, 1000);
-    let tab_id = select_tab(state, req.switch_tab_id).await?;
+    let tab_id = select_tab(
+        state,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+    )
+    .await?;
     let timeout = Duration::from_secs_f64(req.timeout.max(0.1));
     let tabs = active_tabs(state, true).await;
     let tab = tabs
         .iter()
-        .find(|tab| tab.id == tab_id)
+        .find(|tab| tab.session_key == tab_id)
         .cloned()
         .ok_or_else(|| anyhow!("snapshot: tab {tab_id} is not active"))?;
     let ax = cdp_call(
@@ -1192,7 +1434,8 @@ async fn snapshot_page(state: &AppState, req: SnapshotRequest) -> Result<Value> 
         "status": "success",
         "url": tab.url,
         "title": tab.title,
-        "tab_id": tab_id,
+        "tab_id": tab.tab_id,
+        "session_key": tab_id,
         "tree": tree,
         "pagination": {
             "total_operable": total,
@@ -1501,12 +1744,12 @@ async fn element_dom_info(
 async fn run_target_operation(
     state: &AppState,
     kind: OperationKind,
-    switch_tab_id: Option<String>,
+    selector: SessionSelector,
     target: &str,
     payload: Option<Value>,
     options: OperationOptions,
 ) -> Result<Value> {
-    let tab_id = select_tab(state, switch_tab_id).await?;
+    let tab_id = select_tab(state, selector).await?;
     let before = if options.monitor {
         get_html(state, false, 9_999_999, false).await.ok()
     } else {
@@ -1533,11 +1776,11 @@ async fn run_target_operation(
 
 async fn run_send_keys_operation(
     state: &AppState,
-    switch_tab_id: Option<String>,
+    selector: SessionSelector,
     payload: Value,
     options: OperationOptions,
 ) -> Result<Value> {
-    let tab_id = select_tab(state, switch_tab_id).await?;
+    let tab_id = select_tab(state, selector).await?;
     let before = if options.monitor {
         get_html(state, false, 9_999_999, false).await.ok()
     } else {
@@ -1563,12 +1806,15 @@ async fn run_send_keys_operation(
 
 async fn finish_operation(
     state: &AppState,
-    tab_id: String,
+    session_key: String,
     operation: Value,
     before: Option<String>,
     options: OperationOptions,
 ) -> Result<Value> {
-    let mut result = json!({ "status": "success", "tab_id": tab_id, "operation": operation });
+    let physical_tab_id = session_tab_id(state, &session_key)
+        .await
+        .unwrap_or_default();
+    let mut result = json!({ "status": "success", "tab_id": physical_tab_id, "session_key": session_key, "operation": operation });
     if let Some(wait_js) = options.wait_js.as_deref() {
         let wait =
             wait_for_js_condition(state, wait_js, options.wait_timeout, options.wait_interval)
@@ -1627,37 +1873,115 @@ return {{ ok, matched: ok, value, error }};
     .unwrap_or(Value::Null))
 }
 
-async fn select_tab(state: &AppState, switch_tab_id: Option<String>) -> Result<String> {
-    if let Some(tab_id) = switch_tab_id {
-        state.driver.lock().await.default_session_id = Some(tab_id);
-    }
+async fn select_tab(state: &AppState, selector: SessionSelector) -> Result<String> {
     wait_for_sessions(state, Duration::from_secs(5)).await;
-    let driver = state.driver.lock().await;
-    let tab_id = driver
-        .default_session_id
-        .clone()
-        .or_else(|| driver.latest_session_id.clone())
-        .ok_or_else(|| anyhow!("没有可用的浏览器标签页"))?;
-    if !driver
+    let mut driver = state.driver.lock().await;
+    let mut matches: Vec<&Session> = driver
         .sessions
-        .get(&tab_id)
-        .map(Session::is_active)
-        .unwrap_or(false)
-    {
-        return Err(anyhow!("会话ID {tab_id} 未连接"));
+        .values()
+        .filter(|s| s.is_active())
+        .filter(|s| {
+            selector
+                .browser
+                .as_deref()
+                .map(|b| s.browser_id == b)
+                .unwrap_or(true)
+        })
+        .filter(|s| {
+            selector
+                .profile
+                .as_deref()
+                .map(|p| s.profile_id == p || s.profile_label.as_deref() == Some(p))
+                .unwrap_or(true)
+        })
+        .collect();
+
+    if let Some(tab_id) = selector.tab_id.as_deref() {
+        matches.retain(|s| s.tab_id == tab_id || s.session_key == tab_id);
+        if matches.is_empty() {
+            return Err(anyhow!("会话ID {tab_id} 未连接"));
+        }
+        if matches.len() > 1 {
+            return Err(anyhow!(
+                "ambiguous tab {tab_id}, matched {} sessions; please specify --profile or --browser",
+                matches.len()
+            ));
+        }
+        let session_key = matches[0].session_key.clone();
+        driver.default_session_key = Some(session_key.clone());
+        return Ok(session_key);
     }
-    Ok(tab_id)
+
+    if selector.browser.is_some() || selector.profile.is_some() {
+        let preferred = driver
+            .default_session_key
+            .as_ref()
+            .and_then(|key| matches.iter().find(|s| &s.session_key == key))
+            .or_else(|| {
+                driver
+                    .latest_session_key
+                    .as_ref()
+                    .and_then(|key| matches.iter().find(|s| &s.session_key == key))
+            })
+            .or_else(|| matches.first());
+        let session_key = preferred
+            .map(|s| s.session_key.clone())
+            .ok_or_else(|| anyhow!("没有匹配 --browser/--profile 的可用浏览器标签页"))?;
+        driver.default_session_key = Some(session_key.clone());
+        return Ok(session_key);
+    }
+
+    let session_key = driver
+        .default_session_key
+        .as_ref()
+        .and_then(|key| {
+            driver
+                .sessions
+                .get(key)
+                .filter(|s| s.is_active())
+                .map(|s| s.session_key.clone())
+        })
+        .or_else(|| {
+            driver.latest_session_key.as_ref().and_then(|key| {
+                driver
+                    .sessions
+                    .get(key)
+                    .filter(|s| s.is_active())
+                    .map(|s| s.session_key.clone())
+            })
+        })
+        .or_else(|| {
+            driver
+                .sessions
+                .values()
+                .find(|s| s.is_active())
+                .map(|s| s.session_key.clone())
+        })
+        .ok_or_else(|| anyhow!("没有可用的浏览器标签页"))?;
+    driver.default_session_key = Some(session_key.clone());
+    Ok(session_key)
+}
+
+async fn session_tab_id(state: &AppState, session_key: &str) -> Result<String> {
+    let driver = state.driver.lock().await;
+    driver
+        .sessions
+        .get(session_key)
+        .filter(|s| s.is_active())
+        .map(|s| s.tab_id.clone())
+        .ok_or_else(|| anyhow!("会话ID {session_key} 未连接"))
 }
 
 async fn cdp_call(
     state: &AppState,
-    tab_id: &str,
+    session_key: &str,
     method: &str,
     params: Value,
     timeout: Duration,
 ) -> Result<CdpCallResult> {
+    let tab_id = session_tab_id(state, session_key).await?;
     let script = json!({ "cmd": "cdp", "tabId": tab_id.parse::<i64>().unwrap_or_default(), "method": method, "params": params }).to_string();
-    let response = execute_raw_js_on_tab(state, &script, tab_id, timeout).await?;
+    let response = execute_raw_js_on_tab(state, &script, session_key, timeout).await?;
     let value = response.data.or(response.result).unwrap_or(Value::Null);
     match value.get("ok").and_then(Value::as_bool) {
         Some(true) => Ok(CdpCallResult {
@@ -1685,20 +2009,20 @@ async fn cdp_call(
 async fn execute_raw_js_on_tab(
     state: &AppState,
     code: &str,
-    tab_id: &str,
+    session_key: &str,
     timeout: Duration,
 ) -> Result<ExecResult> {
     let previous = {
         let mut driver = state.driver.lock().await;
-        let previous = driver.default_session_id.clone();
-        driver.default_session_id = Some(tab_id.to_string());
+        let previous = driver.default_session_key.clone();
+        driver.default_session_key = Some(session_key.to_string());
         previous
     };
     let result = execute_raw_js(state, code, timeout).await;
     {
         let mut driver = state.driver.lock().await;
-        if driver.default_session_id.as_deref() == Some(tab_id) {
-            driver.default_session_id = previous;
+        if driver.default_session_key.as_deref() == Some(session_key) {
+            driver.default_session_key = previous;
         }
     }
     result
@@ -1706,17 +2030,18 @@ async fn execute_raw_js_on_tab(
 
 async fn batch_cdp_call(
     state: &AppState,
-    tab_id: &str,
+    session_key: &str,
     commands: Vec<Value>,
     timeout: Duration,
 ) -> Result<Value> {
+    let tab_id = session_tab_id(state, session_key).await?;
     let script = json!({
         "cmd": "batch",
         "tabId": tab_id.parse::<i64>().unwrap_or_default(),
         "commands": commands,
     })
     .to_string();
-    let response = execute_raw_js_on_tab(state, &script, tab_id, timeout).await?;
+    let response = execute_raw_js_on_tab(state, &script, session_key, timeout).await?;
     let value = response.data.or(response.result).unwrap_or(Value::Null);
     if value.get("ok").and_then(Value::as_bool) == Some(false) {
         return Err(anyhow!(value
@@ -2356,12 +2681,13 @@ fn role_is_context(role: &str) -> bool {
 
 async fn extension_control(
     state: &AppState,
-    tab_id: &str,
+    session_key: &str,
     command: &str,
     payload: Value,
 ) -> Result<Value> {
     let mut body = serde_json::Map::new();
     body.insert("cmd".to_string(), json!(command));
+    let tab_id = session_tab_id(state, session_key).await?;
     body.insert(
         "tabId".to_string(),
         json!(tab_id.parse::<i64>().unwrap_or_default()),
@@ -2374,7 +2700,7 @@ async fn extension_control(
     let response = execute_raw_js_on_tab(
         state,
         &Value::Object(body).to_string(),
-        tab_id,
+        session_key,
         Duration::from_secs(30),
     )
     .await?;
@@ -2392,7 +2718,11 @@ async fn extension_control(
 async fn network_start(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "networkStart", json!({})).await
     }
     .await;
@@ -2408,7 +2738,11 @@ async fn network_list(
 ) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(
             &state,
             &tab_id,
@@ -2430,7 +2764,11 @@ async fn network_detail(
 ) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(
             &state,
             &tab_id,
@@ -2449,7 +2787,11 @@ async fn network_detail(
 async fn network_clear(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "networkClear", json!({})).await
     }
     .await;
@@ -2462,7 +2804,11 @@ async fn network_clear(State(state): State<AppState>, Json(req): Json<TabRequest
 async fn network_stop(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "networkStop", json!({})).await
     }
     .await;
@@ -2475,7 +2821,11 @@ async fn network_stop(State(state): State<AppState>, Json(req): Json<TabRequest>
 async fn console_start(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "consoleStart", json!({})).await
     }
     .await;
@@ -2491,7 +2841,11 @@ async fn console_list(
 ) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(
             &state,
             &tab_id,
@@ -2510,7 +2864,11 @@ async fn console_list(
 async fn console_clear(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "consoleClear", json!({})).await
     }
     .await;
@@ -2523,7 +2881,11 @@ async fn console_clear(State(state): State<AppState>, Json(req): Json<TabRequest
 async fn console_stop(State(state): State<AppState>, Json(req): Json<TabRequest>) -> Json<Value> {
     touch(&state).await;
     let result = async {
-        let tab_id = select_tab(&state, req.switch_tab_id).await?;
+        let tab_id = select_tab(
+            &state,
+            SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+        )
+        .await?;
         extension_control(&state, &tab_id, "consoleStop", json!({})).await
     }
     .await;
@@ -2553,7 +2915,11 @@ async fn save_pdf(State(state): State<AppState>, Json(req): Json<SavePdfRequest>
 }
 
 async fn screenshot_page(state: &AppState, req: ScreenshotRequest) -> Result<Value> {
-    let tab_id = select_tab(state, req.switch_tab_id).await?;
+    let tab_id = select_tab(
+        state,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+    )
+    .await?;
     let timeout = Duration::from_secs_f64(req.timeout.max(0.1));
     let format = normalize_screenshot_format(&req.format)?;
     let target = match (req.target, req.selector) {
@@ -2624,7 +2990,11 @@ async fn screenshot_page(state: &AppState, req: ScreenshotRequest) -> Result<Val
 }
 
 async fn save_pdf_page(state: &AppState, req: SavePdfRequest) -> Result<Value> {
-    let tab_id = select_tab(state, req.switch_tab_id).await?;
+    let tab_id = select_tab(
+        state,
+        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
+    )
+    .await?;
     let timeout = Duration::from_secs_f64(req.timeout.max(0.1));
     let (paper_width, paper_height) = paper_size(&req.paper)?;
     if !(0.1..=2.0).contains(&req.scale) {

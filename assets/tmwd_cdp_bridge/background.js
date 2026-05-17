@@ -19,6 +19,25 @@ let lastCommandAt = 0;
 const DEFAULT_WS_PORT = 18765;
 const CLI_API_PORT = 18767;
 let wsPort = DEFAULT_WS_PORT;
+const browserId = `browser-${crypto.randomUUID()}`;
+let profileId = null;
+let profileLabel = null;
+
+async function loadClientIdentity() {
+  const data = await chrome.storage.local.get({ profileId: null, profileLabel: null });
+  profileId = data.profileId || `profile-${crypto.randomUUID()}`;
+  profileLabel = data.profileLabel || null;
+  if (!data.profileId) await chrome.storage.local.set({ profileId });
+  return { browserId, profileId, profileLabel };
+}
+
+function withClientIdentity(payload) {
+  return Object.assign({
+    browser_id: browserId,
+    profile_id: profileId || 'profile-pending',
+    profile_label: profileLabel || undefined
+  }, payload);
+}
 
 async function handleExtMessage(msg, sender) {
   if (msg.cmd === 'status') return handleStatus();
@@ -96,7 +115,10 @@ function handleStatus() {
       wsConnected: !!ws && ws.readyState === WebSocket.OPEN,
       wsUrl: getWsUrl(),
       wsPort,
-      lastCommandAt
+      lastCommandAt,
+      browserId,
+      profileId,
+      profileLabel
     }
   };
 }
@@ -479,11 +501,18 @@ async function handleOpenTab(msg) {
   try {
     const url = normalizeOpenUrl(msg.url);
     const active = msg.active !== false;
+    if (msg.window === true) {
+      // window 模式默认不聚焦，避免新窗口打断用户当前工作区。
+      const win = await chrome.windows.create({ url, focused: msg.allowFocus === true });
+      const tab = Array.isArray(win.tabs) && win.tabs.length ? win.tabs[0] : null;
+      const group = tab?.id ? await groupTabIfRequested(tab.id, msg.groupTitle) : { ok: false, skipped: true, reason: 'window created without tab info' };
+      return { ok: true, data: { id: tab?.id, url: tab?.url || url, title: tab?.title || '', active: !!tab?.active, windowId: win.id, window: true, group } };
+    }
     const tab = await chrome.tabs.create({ url, active });
     const group = await groupTabIfRequested(tab.id, msg.groupTitle);
     // 默认创建/激活标签页但不聚焦浏览器窗口，避免打断当前工作区。
     if (active && msg.allowFocus === true && tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
-    return { ok: true, data: { id: tab.id, url: tab.url || url, title: tab.title || '', active: tab.active, windowId: tab.windowId, group } };
+    return { ok: true, data: { id: tab.id, url: tab.url || url, title: tab.title || '', active: tab.active, windowId: tab.windowId, window: false, group } };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -818,11 +847,12 @@ async function connectWS() {
   ws.onopen = async () => {
     console.log('[TMWD-WS] Connected!');
     scheduleKeepalive(); // Keep SW alive while connected
+    await loadClientIdentity();
     const tabs = (await chrome.tabs.query({})).filter(t => isScriptable(t.url));
-    ws.send(JSON.stringify({
+    ws.send(JSON.stringify(withClientIdentity({
       type: 'ext_ready',
       tabs: tabs.map(t => ({ id: t.id, url: t.url, title: t.title }))
-    }));
+    })));
     console.log('[TMWD-WS] Sent ext_ready with', tabs.length, 'tabs');
   };
   ws.onmessage = async (event) => {
@@ -891,10 +921,11 @@ chrome.runtime.onInstalled.addListener(() => {
 async function sendTabsUpdate() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const tabs = (await chrome.tabs.query({})).filter(t => isScriptable(t.url) && !/streamlit/i.test(t.title));
-  ws.send(JSON.stringify({
+  await loadClientIdentity();
+  ws.send(JSON.stringify(withClientIdentity({
     type: 'tabs_update',
     tabs: tabs.map(t => ({ id: t.id, url: t.url, title: t.title }))
-  }));
+  })));
 }
 chrome.tabs.onUpdated.addListener((_, changeInfo) => {
   if (changeInfo.status === 'complete') sendTabsUpdate();

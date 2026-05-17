@@ -8,6 +8,16 @@ use tokio::sync::{mpsc, oneshot};
 pub struct TabInfo {
     pub id: String,
     #[serde(default)]
+    pub tab_id: String,
+    #[serde(default)]
+    pub browser_id: String,
+    #[serde(default)]
+    pub profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_label: Option<String>,
+    #[serde(default)]
+    pub session_key: String,
+    #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub title: String,
@@ -23,6 +33,11 @@ fn default_tab_type() -> String {
 
 #[derive(Debug, Clone)]
 pub struct Session {
+    pub session_key: String,
+    pub tab_id: String,
+    pub browser_id: String,
+    pub profile_id: String,
+    pub profile_label: Option<String>,
     pub info: TabInfo,
     pub sender: mpsc::UnboundedSender<String>,
     pub disconnected_at: Option<Instant>,
@@ -117,8 +132,8 @@ pub struct DriverState {
     pub sessions: HashMap<String, Session>,
     pub snapshots: HashMap<String, SnapshotCache>,
     pub pending: HashMap<String, PendingExec>,
-    pub default_session_id: Option<String>,
-    pub latest_session_id: Option<String>,
+    pub default_session_key: Option<String>,
+    pub latest_session_key: Option<String>,
     pub active_exec_sessions: HashMap<String, String>,
     pub acked: HashSet<String>,
 }
@@ -127,9 +142,25 @@ pub struct DriverState {
 #[serde(tag = "type")]
 pub enum WsIncoming {
     #[serde(rename = "ext_ready")]
-    ExtReady { tabs: Vec<ExtTab> },
+    ExtReady {
+        #[serde(default = "default_browser_id")]
+        browser_id: String,
+        #[serde(default = "default_profile_id")]
+        profile_id: String,
+        #[serde(default)]
+        profile_label: Option<String>,
+        tabs: Vec<ExtTab>,
+    },
     #[serde(rename = "tabs_update")]
-    TabsUpdate { tabs: Vec<ExtTab> },
+    TabsUpdate {
+        #[serde(default = "default_browser_id")]
+        browser_id: String,
+        #[serde(default = "default_profile_id")]
+        profile_id: String,
+        #[serde(default)]
+        profile_label: Option<String>,
+        tabs: Vec<ExtTab>,
+    },
     #[serde(rename = "ack")]
     Ack { id: String },
     #[serde(rename = "result")]
@@ -160,16 +191,40 @@ pub struct ExtTab {
 }
 
 impl ExtTab {
-    pub fn into_tab_info(self) -> TabInfo {
+    pub fn into_tab_info(
+        self,
+        browser_id: &str,
+        profile_id: &str,
+        profile_label: Option<String>,
+    ) -> TabInfo {
+        let tab_id = match self.id {
+            Value::String(s) => s,
+            other => other.to_string(),
+        };
+        let session_key = make_session_key(browser_id, profile_id, &tab_id);
         TabInfo {
-            id: match self.id {
-                Value::String(s) => s,
-                other => other.to_string(),
-            },
+            id: tab_id.clone(),
+            tab_id,
+            browser_id: browser_id.to_string(),
+            profile_id: profile_id.to_string(),
+            profile_label,
+            session_key,
             url: self.url,
             title: self.title,
             tab_type: "ext_ws".to_string(),
             connected_at: None,
         }
     }
+}
+
+pub fn make_session_key(browser_id: &str, profile_id: &str, tab_id: &str) -> String {
+    format!("{browser_id}:{profile_id}:{tab_id}")
+}
+
+fn default_browser_id() -> String {
+    "browser-default".to_string()
+}
+
+fn default_profile_id() -> String {
+    "profile-default".to_string()
 }

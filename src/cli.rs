@@ -25,7 +25,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CommandKind {
-    Tabs,
+    Tabs(TabsArgs),
     Scan(ScanArgs),
     Exec(ExecArgs),
     Snapshot(SnapshotArgs),
@@ -55,9 +55,21 @@ enum CommandKind {
 }
 
 #[derive(Debug, Args)]
+struct TabsArgs {
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct ScanArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     tabs_only: bool,
     #[arg(long)]
@@ -75,6 +87,10 @@ struct ExecArgs {
     #[arg(long)]
     tab: Option<String>,
     #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long)]
     monitor: bool,
     #[arg(long)]
     wait_js: Option<String>,
@@ -90,6 +106,10 @@ struct ExecArgs {
 struct SnapshotArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long, default_value_t = 0)]
     offset: usize,
     #[arg(long, default_value_t = 200)]
@@ -105,6 +125,10 @@ struct TargetCommandArgs {
     target: String,
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     monitor: bool,
     #[arg(long)]
@@ -123,6 +147,10 @@ struct FillCommandArgs {
     value: Option<String>,
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     append: bool,
     #[arg(long)]
@@ -147,6 +175,10 @@ struct SendKeysCommandArgs {
     #[arg(long)]
     tab: Option<String>,
     #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long)]
     monitor: bool,
     #[arg(long)]
     wait_js: Option<String>,
@@ -162,6 +194,10 @@ struct SendKeysCommandArgs {
 struct ScreenshotArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     target: Option<String>,
     #[arg(long)]
@@ -182,6 +218,10 @@ struct ScreenshotArgs {
 struct SavePdfArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     out: Option<PathBuf>,
     #[arg(long, default_value = "a4")]
@@ -229,6 +269,10 @@ struct ConsoleCommand {
 struct TabOnlyArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long, default_value_t = 30.0)]
     timeout: f64,
 }
@@ -237,6 +281,10 @@ struct TabOnlyArgs {
 struct NetworkListArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     filter: Option<String>,
     #[arg(long, default_value_t = 100)]
@@ -250,6 +298,10 @@ struct NetworkDetailArgs {
     request_id: String,
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long, default_value_t = 30.0)]
     timeout: f64,
 }
@@ -258,6 +310,10 @@ struct NetworkDetailArgs {
 struct ConsoleListArgs {
     #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     level: Option<String>,
     #[arg(long, default_value_t = 100)]
@@ -272,7 +328,15 @@ struct OpenArgs {
     #[arg(long)]
     background: bool,
     #[arg(long)]
+    window: bool,
+    #[arg(long)]
+    focus: bool,
+    #[arg(long)]
     tab: Option<String>,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long)]
     session: Option<String>,
     #[arg(long = "group-title")]
@@ -285,6 +349,10 @@ struct OpenArgs {
 struct CloseArgs {
     #[arg(long)]
     tab: String,
+    #[arg(long)]
+    browser: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
     #[arg(long, default_value_t = 30.0)]
     timeout: f64,
 }
@@ -315,9 +383,21 @@ pub fn run() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(server::run_daemon())
         }
-        CommandKind::Tabs => {
+        CommandKind::Tabs(args) => {
             ensure_server()?;
-            print_json(request("GET", "/tabs", None, 30.0)?);
+            let mut path = "/tabs".to_string();
+            let mut query = Vec::new();
+            if let Some(browser) = args.browser {
+                query.push(format!("browser={}", query_escape(&browser)));
+            }
+            if let Some(profile) = args.profile {
+                query.push(format!("profile={}", query_escape(&profile)));
+            }
+            if !query.is_empty() {
+                path.push('?');
+                path.push_str(&query.join("&"));
+            }
+            print_json(request("GET", &path, None, 30.0)?);
             Ok(())
         }
         CommandKind::Scan(args) => {
@@ -329,6 +409,8 @@ pub fn run() -> Result<()> {
                     "tabs_only": args.tabs_only,
                     "text_only": args.text_only,
                     "switch_tab_id": args.tab,
+                    "browser": args.browser,
+                    "profile": args.profile,
                 })),
                 args.timeout,
             )?);
@@ -347,6 +429,8 @@ pub fn run() -> Result<()> {
                 Some(json!({
                     "script": script,
                     "switch_tab_id": args.tab,
+                    "browser": args.browser,
+                    "profile": args.profile,
                     "no_monitor": !args.monitor,
                     "wait_js": args.wait_js,
                     "wait_timeout": args.wait_timeout,
@@ -363,6 +447,8 @@ pub fn run() -> Result<()> {
                 "/snapshot",
                 Some(json!({
                     "switch_tab_id": args.tab,
+                    "browser": args.browser,
+                    "profile": args.profile,
                     "offset": args.offset,
                     "limit": args.limit,
                     "details": args.details,
@@ -388,7 +474,11 @@ pub fn run() -> Result<()> {
                 Some(json!({
                     "url": args.url,
                     "active": !args.background,
+                    "window": args.window,
+                    "allow_focus": args.focus,
                     "switch_tab_id": args.tab,
+                    "browser": args.browser,
+                    "profile": args.profile,
                     "session": args.session,
                     "group_title": args.group_title,
                 })),
@@ -401,7 +491,9 @@ pub fn run() -> Result<()> {
             print_json(request(
                 "POST",
                 "/close",
-                Some(json!({ "tab_id": args.tab })),
+                Some(
+                    json!({ "tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+                ),
                 args.timeout,
             )?);
             Ok(())
@@ -448,6 +540,16 @@ pub fn run() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn query_escape(input: &str) -> String {
+    input
+        .bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => vec![b as char],
+            _ => format!("%{b:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 fn request(method: &str, path: &str, payload: Option<Value>, timeout_secs: f64) -> Result<Value> {
@@ -1003,6 +1105,8 @@ fn run_target_command(path: &str, args: TargetCommandArgs) -> Result<()> {
         Some(json!({
             "target": args.target,
             "switch_tab_id": args.tab,
+            "browser": args.browser,
+            "profile": args.profile,
             "monitor": args.monitor,
             "wait_js": args.wait_js,
             "wait_timeout": args.wait_timeout,
@@ -1026,6 +1130,8 @@ fn run_fill_command(args: FillCommandArgs) -> Result<()> {
             "value": value,
             "has_value": has_value,
             "switch_tab_id": args.tab,
+            "browser": args.browser,
+            "profile": args.profile,
             "append": args.append,
             "clear": args.clear,
             "monitor": args.monitor,
@@ -1048,6 +1154,8 @@ fn run_send_keys_command(args: SendKeysCommandArgs) -> Result<()> {
             "keys": args.keys,
             "target": args.target,
             "switch_tab_id": args.tab,
+            "browser": args.browser,
+            "profile": args.profile,
             "monitor": args.monitor,
             "wait_js": args.wait_js,
             "wait_timeout": args.wait_timeout,
@@ -1065,7 +1173,9 @@ fn run_network_command(args: NetworkCommand) -> Result<()> {
         NetworkAction::Start(args) => print_json(request(
             "POST",
             "/network/start",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
         NetworkAction::List(args) => print_json(request(
@@ -1073,6 +1183,8 @@ fn run_network_command(args: NetworkCommand) -> Result<()> {
             "/network/list",
             Some(json!({
                 "switch_tab_id": args.tab,
+                "browser": args.browser,
+                "profile": args.profile,
                 "filter": args.filter,
                 "limit": args.limit,
             })),
@@ -1083,6 +1195,8 @@ fn run_network_command(args: NetworkCommand) -> Result<()> {
             "/network/detail",
             Some(json!({
                 "switch_tab_id": args.tab,
+                "browser": args.browser,
+                "profile": args.profile,
                 "request_id": args.request_id,
             })),
             args.timeout,
@@ -1090,13 +1204,17 @@ fn run_network_command(args: NetworkCommand) -> Result<()> {
         NetworkAction::Clear(args) => print_json(request(
             "POST",
             "/network/clear",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
         NetworkAction::Stop(args) => print_json(request(
             "POST",
             "/network/stop",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
     }
@@ -1109,7 +1227,9 @@ fn run_console_command(args: ConsoleCommand) -> Result<()> {
         ConsoleAction::Start(args) => print_json(request(
             "POST",
             "/console/start",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
         ConsoleAction::List(args) => print_json(request(
@@ -1117,6 +1237,8 @@ fn run_console_command(args: ConsoleCommand) -> Result<()> {
             "/console/list",
             Some(json!({
                 "switch_tab_id": args.tab,
+                "browser": args.browser,
+                "profile": args.profile,
                 "level": args.level,
                 "limit": args.limit,
             })),
@@ -1125,13 +1247,17 @@ fn run_console_command(args: ConsoleCommand) -> Result<()> {
         ConsoleAction::Clear(args) => print_json(request(
             "POST",
             "/console/clear",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
         ConsoleAction::Stop(args) => print_json(request(
             "POST",
             "/console/stop",
-            Some(json!({ "switch_tab_id": args.tab })),
+            Some(
+                json!({ "switch_tab_id": args.tab, "browser": args.browser, "profile": args.profile }),
+            ),
             args.timeout,
         )?),
     }
@@ -1145,6 +1271,8 @@ fn run_screenshot_command(args: ScreenshotArgs) -> Result<()> {
         "/screenshot",
         Some(json!({
             "switch_tab_id": args.tab,
+            "browser": args.browser,
+            "profile": args.profile,
             "target": args.target,
             "selector": args.selector,
             "out": args.out,
@@ -1165,6 +1293,8 @@ fn run_save_pdf_command(args: SavePdfArgs) -> Result<()> {
         "/save-pdf",
         Some(json!({
             "switch_tab_id": args.tab,
+            "browser": args.browser,
+            "profile": args.profile,
             "out": args.out,
             "paper": args.paper,
             "landscape": args.landscape,

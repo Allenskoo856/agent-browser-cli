@@ -2,6 +2,29 @@
 
 所有重要变更都会记录在这里。日期使用北京时间自然日。
 
+## v0.3.1-beta.2 - 2026-05-17
+
+### 新增
+
+- 新增多浏览器 / 多 Chrome Profile 会话隔离：扩展上报 `browser_id`、`profile_id`，daemon 内部使用 `session_key = browser_id:profile_id:tab_id` 路由。
+- CLI 主要浏览器命令新增 `--browser` 和 `--profile`，支持按浏览器实例和 Profile 过滤/定位 tab。
+- `tabs` 输出新增 `browser_id`、`profile_id`、`profile_label`、`tab_id`、`session_key`。
+- `open` 新增 `--window`，支持新开独立 Chrome 窗口。
+- `open` 新增 `--focus`，只有显式传入时才请求聚焦窗口。
+- `open --window --group-title/--session` 支持对新窗口首个 tab 创建 Chrome tab group。
+
+### 调整
+
+- `open` 返回结构改为以新打开目标为主：`opened_tab_id`、`opened_session_key`、`window_id`、`window`、`group`。旧执行通道移入 `metadata.executor`，避免 AI 误用旧 tab。
+- daemon 在默认 session 失效时会回退到当前 active session，避免重启后卡在旧 `session_key`。
+- `snapshot`、`@e` 缓存、调试缓存、截图/PDF、network/console 等路径统一按 `session_key` 隔离。
+- skill 文档补充多 Profile、多浏览器、`open --window`、`--focus` 和 `opened_tab_id` 使用说明。
+
+### 验证
+
+- 已覆盖真实 Chrome 场景：多 Profile 字段上报、`tabs --profile`、`exec/scan/snapshot/click/screenshot/save-pdf/network/console --profile --tab`、`open` tab/window/background/focus/group/session 组合、关闭测试 tab。
+- 已执行 `cargo fmt --check`、`cargo check`、`cargo build`、`cargo test`、`node --check`、`npm pack --dry-run`。
+
 ## v0.3.1-beta.1 - 2026-05-16
 
 ### 新增
@@ -16,7 +39,7 @@
 - 新增 `save-pdf`：支持纸张、横向、缩放、打印背景、默认文件名清理和 50MB 上限。
 - 新增 `network` 调试命令：`start`、`list`、`detail`、`clear`、`stop`。
 - 新增 `console` 调试命令：`start`、`list`、`clear`、`stop`。
-- `open 新增 `--session` 和 `--group-title`，支持 Chrome 原生 tab group。
+- `open` 新增 `--session` 和 `--group-title`，支持 Chrome 原生 tab group。
 - 新增 `close --tab <tabId>`，通过扩展原生 `chrome.tabs.remove` 关闭标签页。
 - Chrome 扩展新增 bot 图标，显示名改为 `Agent Browser CLI Bridge`。
 - daemon 退出时清理 daemon 缓存，并通知扩展清理 network/console 调试缓存。
