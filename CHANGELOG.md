@@ -2,30 +2,7 @@
 
 所有重要变更都会记录在这里。日期使用北京时间自然日。
 
-## v0.3.1-beta.2 - 2026-05-17
-
-### 新增
-
-- 新增多浏览器 / 多 Chrome Profile 会话隔离：扩展上报 `browser_id`、`profile_id`，daemon 内部使用 `session_key = browser_id:profile_id:tab_id` 路由。
-- CLI 主要浏览器命令新增 `--browser` 和 `--profile`，支持按浏览器实例和 Profile 过滤/定位 tab。
-- `tabs` 输出新增 `browser_id`、`profile_id`、`profile_label`、`tab_id`、`session_key`。
-- `open` 新增 `--window`，支持新开独立 Chrome 窗口。
-- `open` 新增 `--focus`，只有显式传入时才请求聚焦窗口。
-- `open --window --group-title/--session` 支持对新窗口首个 tab 创建 Chrome tab group。
-
-### 调整
-
-- `open` 返回结构改为以新打开目标为主：`opened_tab_id`、`opened_session_key`、`window_id`、`window`、`group`。旧执行通道移入 `metadata.executor`，避免 AI 误用旧 tab。
-- daemon 在默认 session 失效时会回退到当前 active session，避免重启后卡在旧 `session_key`。
-- `snapshot`、`@e` 缓存、调试缓存、截图/PDF、network/console 等路径统一按 `session_key` 隔离。
-- skill 文档补充多 Profile、多浏览器、`open --window`、`--focus` 和 `opened_tab_id` 使用说明。
-
-### 验证
-
-- 已覆盖真实 Chrome 场景：多 Profile 字段上报、`tabs --profile`、`exec/scan/snapshot/click/screenshot/save-pdf/network/console --profile --tab`、`open` tab/window/background/focus/group/session 组合、关闭测试 tab。
-- 已执行 `cargo fmt --check`、`cargo check`、`cargo build`、`cargo test`、`node --check`、`npm pack --dry-run`。
-
-## v0.3.1-beta.1 - 2026-05-16
+## v0.3.1 - 2026-05-17
 
 ### 新增
 
@@ -34,27 +11,37 @@
 - 新增 `install-skill`：支持 `--dry-run` 和 `--yes`，用于安装/更新 Agent skill。
 - 增强 `status`：新增 `healthy`、`summary`、`message`，保留旧字段。
 - 新增 `snapshot`：基于 Chrome Accessibility Tree 生成 `@e` 操作引用，支持 `--offset`、`--limit`、`--details`、`--tab`。
-- 新增高层操作命令：`click`、`fill`、`send-keys`、`mouse-click`。
+- 新增高层操作命令：`click`、`fill`、`send-keys`、`mouse-click`，支持 `--monitor`、`--wait-js`、`--wait-timeout`。
 - 新增 `screenshot`：支持视口截图、全页截图、元素截图、PNG/JPEG、默认落盘目录。
 - 新增 `save-pdf`：支持纸张、横向、缩放、打印背景、默认文件名清理和 50MB 上限。
 - 新增 `network` 调试命令：`start`、`list`、`detail`、`clear`、`stop`。
 - 新增 `console` 调试命令：`start`、`list`、`clear`、`stop`。
+- 新增多浏览器 / 多 Chrome Profile 会话隔离：扩展上报 `browser_id`、`profile_id`、`profile_label`，daemon 内部使用 `session_key = browser_id:profile_id:tab_id` 路由。
+- CLI 主要浏览器命令新增 `--browser` 和 `--profile`，支持按浏览器实例和 Profile 过滤/定位 tab。
+- `tabs` 输出新增 `browser_id`、`profile_id`、`profile_label`、`tab_id`、`session_key`。
 - `open` 新增 `--session` 和 `--group-title`，支持 Chrome 原生 tab group。
+- `open` 新增 `--window`，支持新开独立 Chrome 窗口。
+- `open` 新增 `--focus`，只有显式传入时才请求聚焦窗口。
+- `open --window --group-title/--session` 支持对新窗口首个 tab 创建 Chrome tab group。
 - 新增 `close --tab <tabId>`，通过扩展原生 `chrome.tabs.remove` 关闭标签页。
-- Chrome 扩展新增 bot 图标，显示名改为 `Agent Browser CLI Bridge`。
-- daemon 退出时清理 daemon 缓存，并通知扩展清理 network/console 调试缓存。
+- Chrome 扩展新增图标，显示名改为 `Agent Browser CLI Bridge`。
 
 ### 调整
 
+- `open` 返回结构改为以新打开目标为主：`opened_tab_id`、`opened_session_key`、`window_id`、`window`、`group`。旧执行通道移入 `metadata.executor`，避免 AI 误用旧 tab。
+- daemon 在默认 session 失效时会回退到当前 active session，避免重启后卡在旧 `session_key`。
+- `snapshot`、`@e` 缓存、调试缓存、截图/PDF、network/console 等路径统一按 `session_key` 隔离。
 - daemon stdout/stderr 日志固定写入用户目录，不再落到当前目录或 npm 包目录。
 - npm wrapper 设置 `AGENT_BROWSER_CLI_PACKAGE_DIR`，方便全局安装后定位内置 skill。
 - `network stop` / `console stop` 会停止监听并清理对应缓存。
-- skill 文档重写为 Agent 操作 SOP，明确 `scan`、`snapshot`、`exec/CDP` 的职责边界。
+- daemon 退出时清理 daemon 缓存，并通知扩展清理 network/console 调试缓存。
+- skill 文档重写为 Agent 操作 SOP，明确 `scan`、`snapshot`、`exec/CDP` 的职责边界，并补充多 Profile、多浏览器、`open --window`、`--focus` 和 `opened_tab_id` 使用说明。
 
 ### 验证
 
 - 已覆盖真实 Chrome 场景：百度搜索、页面扫描、DOM 定位、输入/点击、截图、PDF、network/console 监听、缓存清理、tab group、关闭测试 tab。
-- 已执行 `cargo fmt --check`、`cargo check`、`cargo build`、`cargo test`、`node --check`。
+- 已覆盖多 Profile 字段上报、`tabs --profile`、`tabs --browser --profile`、`exec/scan/snapshot/click/fill/send-keys/mouse-click/screenshot/save-pdf/network/console --profile --tab`、`open` tab/window/background/focus/group/session 组合。
+- 已执行 `cargo fmt --check`、`cargo check`、`cargo build`、`cargo test`、`node --check`、`npm pack --dry-run`。
 
 ## v0.2.10-extension - 2026-05-15
 
