@@ -1413,6 +1413,12 @@ async fn snapshot_page(state: &AppState, req: SnapshotRequest) -> Result<Value> 
         .values()
         .filter(|entry| entry.index >= req.offset && entry.index < req.offset + limit)
         .count();
+    // `active_tabs` 返回的是面向 CLI 展示的 TabInfo，其中长 URL 会被截断。
+    // snapshot 缓存必须保存完整 URL，否则后续 `@e` 操作会把截断 URL
+    // 和页面真实 `location.href` 比较，误判为 `ref expired`。
+    let snapshot_url = current_location(state, &tab_id, timeout)
+        .await
+        .unwrap_or_else(|_| tab.url.clone());
     {
         let mut driver = state.driver.lock().await;
         let generation = driver
@@ -1424,7 +1430,7 @@ async fn snapshot_page(state: &AppState, req: SnapshotRequest) -> Result<Value> 
             tab_id.clone(),
             SnapshotCache {
                 generation,
-                url: tab.url.clone(),
+                url: snapshot_url,
                 refs: all_refs,
             },
         );
