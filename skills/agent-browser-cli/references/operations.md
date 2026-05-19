@@ -2,13 +2,22 @@
 
 ## 基本顺序
 
-先看轻量状态：
+正常浏览器任务不要从本文件开始，也不要先查状态。先执行目标命令，让 CLI 按需自动启动 daemon：
+
+```bash
+agent-browser-cli tabs
+agent-browser-cli open https://example.com
+agent-browser-cli scan --text-only
+agent-browser-cli exec --tab <tabId> 'return document.title'
+```
+
+只有目标命令失败、输出明确提示连接异常，或用户明确要求排障时，才看轻量状态：
 
 ```bash
 agent-browser-cli status
 ```
 
-再做完整自检：
+再按需做完整自检：
 
 ```bash
 agent-browser-cli doctor
@@ -16,6 +25,7 @@ agent-browser-cli logs --tail 100
 ```
 
 `status` 的 `ok=true` 只表示命令执行成功；是否可用看 `healthy` 和 `summary`。
+`daemon_not_running` / `running=false` 只表示当前未常驻；在尚未执行目标命令前，这通常是正常状态，不应阻塞任务。
 
 ## daemon 未运行
 
@@ -32,7 +42,7 @@ agent-browser-cli restart
 agent-browser-cli status
 ```
 
-也可以执行 `tabs/open/exec/scan` 自动启动 daemon。`doctor` 不会自动启动 daemon。
+浏览器任务中优先执行 `tabs/open/exec/scan` 自动启动 daemon；只有自动启动失败或需要排障时再 `restart`。`doctor` 不会自动启动 daemon。
 
 ## 扩展未连接
 

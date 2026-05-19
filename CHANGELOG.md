@@ -4,6 +4,14 @@
 
 ## 已发布
 
+## v0.3.4 - 2026-05-19
+
+### 调整
+
+- 调整 `agent-browser-cli` skill 的默认操作流程：浏览器任务优先直接执行 `tabs` / `open` / `exec` / `scan`，由 CLI 按需自动启动 daemon。
+- 明确 `daemon_not_running` / `running=false` 只是未常驻状态，不能在尚未执行目标命令前阻塞任务。
+- 将 `status` / `doctor` / `logs` 收敛为目标命令失败、连接异常或用户明确排障时才使用的诊断入口。
+
 ## v0.3.3 - 2026-05-18
 
 - `tabtree` 默认改为 compact 输出，截断长 URL 并省略 `session_key` 以降低 token 消耗；新增 `tabtree --full` 输出完整 URL 和 `session_key`。
