@@ -188,6 +188,18 @@ async function handleCookies(msg, sender) {
 
 
 const debugSessions = new Map();
+const DEBUG_DETACH_DELAY_MS = 30000;
+const DEBUG_DETACH_ALARM_PREFIX = 'tmwd-debug-detach-';
+
+function debugDetachAlarmName(tabId) {
+  return `${DEBUG_DETACH_ALARM_PREFIX}${tabId}`;
+}
+
+function scheduleDebugDetach(session, reason = 'idle') {
+  if (!session || !session.attached || session.network || session.console) return;
+  session.detachReason = reason;
+  chrome.alarms.create(debugDetachAlarmName(session.tabId), { delayInMinutes: DEBUG_DETACH_DELAY_MS / 60000 });
+}
 
 function resolveTabId(msg, sender) {
   const tabId = Number(msg.tabId || sender.tab?.id);
@@ -205,7 +217,8 @@ function getDebugSession(tabId) {
       console: false,
       requests: new Map(),
       requestOrder: [],
-      logs: []
+      logs: [],
+      detachReason: null
     };
     debugSessions.set(tabId, session);
   }
@@ -249,6 +262,8 @@ async function attachDebuggerWithRecovery(tabId) {
 }
 
 async function ensureDebugAttached(session) {
+  await chrome.alarms.clear(debugDetachAlarmName(session.tabId)).catch(() => null);
+  session.detachReason = null;
   if (session.attached) return;
   await attachDebuggerWithRecovery(session.tabId);
   session.attached = true;
@@ -256,6 +271,7 @@ async function ensureDebugAttached(session) {
 
 async function detachDebugSession(session, reason = 'manual') {
   if (!session) return;
+  await chrome.alarms.clear(debugDetachAlarmName(session.tabId)).catch(() => null);
   if (session.attached) {
     try { await chrome.debugger.detach({ tabId: session.tabId }); } catch (e) {
       console.log('[TMWD-DEBUG] detach failed:', session.tabId, reason, e.message);
@@ -264,11 +280,12 @@ async function detachDebugSession(session, reason = 'manual') {
   session.attached = false;
   session.network = false;
   session.console = false;
+  session.detachReason = null;
 }
 
 async function detachDebugIfIdle(session) {
   if (!session.attached || session.network || session.console) return;
-  await detachDebugSession(session, 'idle');
+  scheduleDebugDetach(session, 'idle');
 }
 
 async function detachAllDebugSessions(reason = 'cleanup') {
@@ -531,11 +548,13 @@ function onDebuggerEvent(source, method, params) {
 
 function onDebuggerDetach(source) {
   if (!source.tabId) return;
+  chrome.alarms.clear(debugDetachAlarmName(source.tabId));
   const session = debugSessions.get(source.tabId);
   if (session) {
     session.attached = false;
     session.network = false;
     session.console = false;
+    session.detachReason = null;
   }
 }
 
@@ -549,9 +568,7 @@ async function handleCloseTab(msg, sender) {
     const tabId = Number(msg.tabId || sender.tab?.id);
     if (!Number.isInteger(tabId) || tabId <= 0) throw new Error('tabId is required');
     const session = debugSessions.get(tabId);
-    if (session?.attached) {
-      try { await chrome.debugger.detach({ tabId }); } catch (_) {}
-    }
+    if (session?.attached) await detachDebugSession(session, 'close-tab');
     debugSessions.delete(tabId);
     await chrome.tabs.remove(tabId);
     return { ok: true, data: { status: 'success', tabId } };
@@ -619,7 +636,7 @@ function normalizeOpenUrl(url) {
 
 async function handleBatch(msg, sender) {
   const R = [];
-  let attached = null;
+  const touchedSessions = new Set();
   const resolve$N = (params) => JSON.parse(JSON.stringify(params || {}).replace(/"\$(\d+)\.([^"]+)"/g,
     (_, i, path) => { let v = R[+i]; for (const k of path.split('.')) v = v[k]; return JSON.stringify(v); }));
   try {
@@ -636,20 +653,18 @@ async function handleBatch(msg, sender) {
           R.push({ skipped: true, reason: 'Page.bringToFront requires allowFocus=true' });
           continue;
         }
-        if (attached !== tabId) {
-          if (attached) { await chrome.debugger.detach({ tabId: attached }); attached = null; }
-          await attachDebuggerWithRecovery(tabId);
-          attached = tabId;
-        }
+        const session = getDebugSession(tabId);
+        await ensureDebugAttached(session);
+        touchedSessions.add(session);
         R.push(await chrome.debugger.sendCommand({ tabId }, c.method, resolve$N(c.params)));
       } else {
         R.push({ ok: false, error: 'unknown cmd: ' + c.cmd });
       }
     }
-    if (attached) await chrome.debugger.detach({ tabId: attached });
+    for (const session of touchedSessions) scheduleDebugDetach(session, 'batch-idle');
     return { ok: true, results: R };
   } catch (e) {
-    if (attached) try { await chrome.debugger.detach({ tabId: attached }); } catch (_) {}
+    for (const session of touchedSessions) scheduleDebugDetach(session, 'batch-error');
     return { ok: false, error: e.message, results: R };
   }
 }
@@ -660,13 +675,14 @@ async function handleCDP(msg, sender) {
   if (msg.method === 'Page.bringToFront' && msg.allowFocus !== true) {
     return { ok: true, data: { skipped: true, reason: 'Page.bringToFront requires allowFocus=true' } };
   }
+  const session = getDebugSession(tabId);
   try {
-    await attachDebuggerWithRecovery(tabId);
+    await ensureDebugAttached(session);
     const result = await chrome.debugger.sendCommand({ tabId }, msg.method, msg.params || {});
-    await chrome.debugger.detach({ tabId });
+    scheduleDebugDetach(session, 'cdp-idle');
     return { ok: true, data: result };
   } catch (e) {
-    try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+    scheduleDebugDetach(session, 'cdp-error');
     return { ok: false, error: e.message };
   }
 }
@@ -880,6 +896,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     chrome.runtime.reload();
     return;
   }
+  if (alarm.name.startsWith(DEBUG_DETACH_ALARM_PREFIX)) {
+    const tabId = Number(alarm.name.slice(DEBUG_DETACH_ALARM_PREFIX.length));
+    const session = debugSessions.get(tabId);
+    if (session?.attached && !session.network && !session.console) {
+      await detachDebugSession(session, session.detachReason || 'delayed-idle');
+    }
+    return;
+  }
   if (alarm.name === 'tmwd-ws-keepalive') {
     // Keepalive: ping to keep SW alive + detect dead connections
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -938,13 +962,14 @@ async function handleWsExec(data) {
       console.log('[TMWD-WS] CDP fallback for tab', tabId);
       const wrappedCode = buildCdpScript(data.code);
       try {
-        await attachDebuggerWithRecovery(tabId);
+        const session = getDebugSession(tabId);
+        await ensureDebugAttached(session);
         await setDialogSuppressionByCdp(tabId, true);
         const cdpRes = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
           expression: wrappedCode, awaitPromise: true, returnByValue: true
         });
         await setDialogSuppressionByCdp(tabId, false);
-        await chrome.debugger.detach({ tabId });
+        scheduleDebugDetach(session, 'ws-exec-idle');
         if (cdpRes.exceptionDetails) {
           const desc = cdpRes.exceptionDetails.exception?.description || 'CDP Error';
           res = { ok: false, error: { name: 'Error', message: desc, stack: desc } };
@@ -953,7 +978,7 @@ async function handleWsExec(data) {
         }
       } catch (cdpErr) {
         try { await setDialogSuppressionByCdp(tabId, false); } catch (_) {}
-        try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+        scheduleDebugDetach(getDebugSession(tabId), 'ws-exec-error');
         res = { ok: false, error: { name: 'Error', message: 'CDP fallback failed: ' + cdpErr.message, stack: '' } };
       }
     }
