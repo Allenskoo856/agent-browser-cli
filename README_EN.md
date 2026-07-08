@@ -10,7 +10,7 @@ Browser perception · Page control · Chrome session reuse · CDP · Conditional
   <a href="https://github.com/sleepinginsummer/agent-browser-cli"><img src="https://img.shields.io/badge/CLI-agentbrowsercli-2ea44f" alt="CLI agentbrowsercli"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License MIT"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6?labelColor=0078D6&color=C0C0C0" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-browser-cli/releases"><img src="https://img.shields.io/badge/release-v0.3.1--beta.1-orange" alt="release v0.3.1-beta.1"></a>
+  <a href="https://github.com/sleepinginsummer/agent-browser-cli/releases"><img src="https://img.shields.io/badge/release-v0.3.5-orange" alt="release v0.3.5"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -26,7 +26,7 @@ This project is not Selenium or Playwright. It is better suited for helping agen
 
 ## Project Info
 
-- Current version: `0.3.1-beta.1`
+- Current version: `0.3.5`
 - Supported platforms: Windows (including WSL) / Mac / Linux
 - Browser: Chrome, with the `assets/tmwd_cdp_bridge` extension loaded
 - Linux prerequisite: the local Chrome / Chromium build must support loading extensions
@@ -51,6 +51,7 @@ Please read https://github.com/sleepinginsummer/agent-browser-cli/blob/main/AI_I
 - Adds a startup lock to avoid repeated low-level port binding when multiple CLI commands start concurrently.
 - Adds the skill `skills/agent-browser-cli/SKILL.md` for AI usage reference.
 - Includes several optimizations to reduce command execution time.
+- Optimizes the CDP debugger attach/detach flow to reduce page flicker and stale attach state after abnormal exits.
 - Rust implementation for the CLI side.
 
 ## What It Can Do
@@ -204,6 +205,22 @@ The README only keeps the quick entry point. For the full command list and brows
 
 ```bash
 agent-browser-cli tabs
+agent-browser-cli scan
+agent-browser-cli exec 'document.title'
+agent-browser-cli snapshot
+agent-browser-cli click @e1
+agent-browser-cli fill @e2 'text'
+agent-browser-cli send-keys Enter --target @e2
+agent-browser-cli mouse-click @e1
+agent-browser-cli screenshot --full-page
+agent-browser-cli save-pdf
+agent-browser-cli network start
+agent-browser-cli network list
+agent-browser-cli console start
+agent-browser-cli console list
+agent-browser-cli open https://example.com --window --focus
+agent-browser-cli open https://example.com --group-title demo
+agent-browser-cli close --tab <tabId>
 agent-browser-cli tabtree
 agent-browser-cli tabtree --full
 agent-browser-cli tabtree --profile <profile_label>
@@ -212,6 +229,10 @@ agent-browser-cli lookup tab <tabId>
 agent-browser-cli lookup browser <browser_id>
 agent-browser-cli profile-label set work --profile <profile_id>
 agent-browser-cli profile-label clear --profile <profile_id>
+agent-browser-cli status
+agent-browser-cli doctor
+agent-browser-cli logs --tail 100
+agent-browser-cli install-skill --dry-run
 ```
 
 ## Update
@@ -237,6 +258,7 @@ agent-browser-cli stop
 Then clean up as needed:
 
 ```bash
+npm uninstall -g @sleepinsummer/agent-browser-cli
 rm -f .agent-browser-cli.log .agent-browser-cli.lock
 rm -rf ~/.agents/skills/agent-browser-cli
 ```

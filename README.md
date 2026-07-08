@@ -10,7 +10,7 @@
   <a href="https://github.com/sleepinginsummer/agent-browser-cli"><img src="https://img.shields.io/badge/CLI-agentbrowsercli-2ea44f" alt="CLI agentbrowsercli"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License MIT"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6?labelColor=0078D6&color=C0C0C0" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-browser-cli/releases"><img src="https://img.shields.io/badge/release-v0.3.4-orange" alt="release v0.3.4"></a>
+  <a href="https://github.com/sleepinginsummer/agent-browser-cli/releases"><img src="https://img.shields.io/badge/release-v0.3.5-orange" alt="release v0.3.5"></a>
   <a href="https://github.com/sleepinginsummer/agent-browser-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -26,7 +26,7 @@
 
 ## 项目信息
 
-- 当前版本：`0.3.1-beta.1`
+- 当前版本：`0.3.5`
 - 支持平台：Windows（包括 WSL）/ Mac / Linux
 - 浏览器：Chrome，需加载拓展 `assets/tmwd_cdp_bridge`
 - Linux 支持前提：本机 Chrome / Chromium 需要支持安装扩展
@@ -51,6 +51,7 @@
 - 新增启动锁，避免多个 CLI 并发启动时重复绑定底层端口。
 - 增加skill：`skills/agent-browser-cli/SKILL.md`，提供ai参考使用。
 - 若干优化，缩短命令执行时间
+- 优化 CDP debugger attach/detach 流程，减少页面闪烁和异常退出后的残留 attach
 - rust实现cli端
 
 ## 他能做的事情
@@ -207,6 +208,22 @@ README 只保留快速入口；完整命令和浏览器操作 SOP 见 [skills/ag
 
 ```bash
 agent-browser-cli tabs
+agent-browser-cli scan
+agent-browser-cli exec 'document.title'
+agent-browser-cli snapshot
+agent-browser-cli click @e1
+agent-browser-cli fill @e2 'text'
+agent-browser-cli send-keys Enter --target @e2
+agent-browser-cli mouse-click @e1
+agent-browser-cli screenshot --full-page
+agent-browser-cli save-pdf
+agent-browser-cli network start
+agent-browser-cli network list
+agent-browser-cli console start
+agent-browser-cli console list
+agent-browser-cli open https://example.com --window --focus
+agent-browser-cli open https://example.com --group-title demo
+agent-browser-cli close --tab <tabId>
 agent-browser-cli tabtree
 agent-browser-cli tabtree --full
 agent-browser-cli tabtree --profile <profile_label>
@@ -215,6 +232,10 @@ agent-browser-cli lookup tab <tabId>
 agent-browser-cli lookup browser <browser_id>
 agent-browser-cli profile-label set work --profile <profile_id>
 agent-browser-cli profile-label clear --profile <profile_id>
+agent-browser-cli status
+agent-browser-cli doctor
+agent-browser-cli logs --tail 100
+agent-browser-cli install-skill --dry-run
 ```
 
 ## 更新
@@ -223,10 +244,10 @@ agent-browser-cli profile-label clear --profile <profile_id>
 
 ai一句话更新
 ```text
-请阅读 https://github.com/sleepinginsummer/agent-browser-cli/blob/main/AI_INSTALL.md，按说明更新 CLI、重新下载插件zip让用户指定位置，用户手动加载 Chrome 扩展，并更新相关 SKILL.md`。
+请阅读 https://github.com/sleepinginsummer/agent-browser-cli/blob/main/AI_INSTALL.md，按说明更新 CLI、重新下载插件 zip 到用户指定位置，用户手动加载 Chrome 扩展，并更新相关 SKILL.md。
 ```
 
-如果 Chrome 扩展有更新，在 `chrome://extensions` 中重新下载zpi覆盖，然后重新加载 `assets/tmwd_cdp_bridge` 扩展。
+如果 Chrome 扩展有更新，在 `chrome://extensions` 中重新下载 zip 覆盖，然后重新加载 `assets/tmwd_cdp_bridge` 扩展。
 
 
 ## 卸载
