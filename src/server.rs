@@ -1,13 +1,16 @@
+use crate::open_target::{resolve_open_target, OpenTargetError, TargetKind};
 use crate::protocol::{
     DriverState, ElementDomInfo, ElementRef, ExecResult, RectInfo, Session, SnapshotCache, TabInfo,
     WsIncoming,
 };
 use crate::{config, html};
 use anyhow::{anyhow, Result};
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::http::{header::ORIGIN, HeaderMap, Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -19,11 +22,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
-use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 const HOST: &str = "127.0.0.1";
 const API_PORT: u16 = 18767;
+const LOOPBACK_API_ORIGIN: &str = "http://127.0.0.1:18767";
+const LOCALHOST_API_ORIGIN: &str = "http://localhost:18767";
+const CHROME_EXTENSION_ORIGIN_PREFIX: &str = "chrome-extension://";
 // daemon 在无 CLI/API 业务请求后自动退出，避免浏览器扩展长期保持“已连接”浮层。
 const IDLE_SHUTDOWN_TTL: Duration = Duration::from_secs(300);
 const IDLE_SHUTDOWN_CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -36,6 +41,7 @@ pub struct AppState {
     shutdown: mpsc::UnboundedSender<()>,
     sessions_ready: Arc<Notify>,
     extension_port: u16,
+    api_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,7 +73,9 @@ struct ExecRequest {
 
 #[derive(Debug, Deserialize)]
 struct OpenRequest {
-    url: String,
+    target: Option<String>,
+    url: Option<String>,
+    cwd: Option<PathBuf>,
     #[serde(default = "default_active")]
     active: bool,
     switch_tab_id: Option<String>,
@@ -79,6 +87,8 @@ struct OpenRequest {
     window: bool,
     #[serde(default)]
     allow_focus: bool,
+    #[serde(default = "default_open_readiness_timeout")]
+    readiness_timeout: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,6 +291,10 @@ fn default_wait_timeout() -> f64 {
     3.0
 }
 
+fn default_open_readiness_timeout() -> f64 {
+    10.0
+}
+
 fn default_wait_interval() -> f64 {
     0.1
 }
@@ -332,6 +346,10 @@ impl SessionSelector {
 
 pub async fn run_daemon() -> Result<()> {
     let extension_port = config::load_or_create()?.extension_port;
+    let addr: SocketAddr = format!("{HOST}:{API_PORT}").parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let api_token = Uuid::new_v4().simple().to_string();
+    config::save_api_token(&api_token)?;
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
     let state = AppState {
         driver: Arc::new(Mutex::new(DriverState::default())),
@@ -340,6 +358,7 @@ pub async fn run_daemon() -> Result<()> {
         shutdown: shutdown_tx,
         sessions_ready: Arc::new(Notify::new()),
         extension_port,
+        api_token,
     };
 
     let ws_state = state.clone();
@@ -354,7 +373,24 @@ pub async fn run_daemon() -> Result<()> {
         monitor_idle_shutdown(idle_state).await;
     });
 
-    let app = Router::new()
+    let app = build_api_router(state.clone());
+
+    println!("agent-browser-cli rust server listening on http://{addr}");
+    let cleanup_state = state.clone();
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.recv().await;
+            cleanup_on_shutdown(&cleanup_state).await;
+        })
+        .await;
+    // Keep the last token file after shutdown. The next daemon rotates it after binding the API
+    // port, avoiding an exiting daemon racing with and deleting a newer daemon's token.
+    serve_result?;
+    Ok(())
+}
+
+fn build_api_router(state: AppState) -> Router {
+    Router::new()
         .route("/", get(root))
         .route("/health", get(health))
         .route("/tabs", get(tabs))
@@ -384,25 +420,66 @@ pub async fn run_daemon() -> Result<()> {
         .route("/console/clear", post(console_clear))
         .route("/console/stop", post(console_stop))
         .route("/shutdown", post(shutdown))
-        .with_state(state.clone())
-        .layer(CorsLayer::permissive());
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_access,
+        ))
+        .with_state(state)
+}
 
-    let addr: SocketAddr = format!("{HOST}:{API_PORT}").parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("agent-browser-cli rust server listening on http://{addr}");
-    let cleanup_state = state.clone();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.recv().await;
-            cleanup_on_shutdown(&cleanup_state).await;
-        })
-        .await?;
+async fn require_api_access(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Err((status, code, message)) = validate_api_access(request.headers(), &state.api_token) {
+        return (
+            status,
+            Json(json!({ "ok": false, "error": message, "error_code": code })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+fn validate_api_access(
+    headers: &HeaderMap,
+    expected_token: &str,
+) -> std::result::Result<(), (StatusCode, &'static str, &'static str)> {
+    if let Some(origin) = headers.get(ORIGIN) {
+        let allowed = origin
+            .to_str()
+            .map(|value| matches!(value, LOOPBACK_API_ORIGIN | LOCALHOST_API_ORIGIN))
+            .unwrap_or(false);
+        if !allowed {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "origin_not_allowed",
+                "Browser origins are not allowed to access the local API",
+            ));
+        }
+    }
+    let authorized = headers
+        .get(config::API_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == expected_token);
+    if !authorized {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "invalid_api_token",
+            "A valid API token is required",
+        ));
+    }
     Ok(())
+}
+
+fn build_ws_router(state: AppState) -> Router {
+    Router::new().route("/", get(ws_handler)).with_state(state)
 }
 
 async fn run_ws_server(state: AppState) -> Result<()> {
     let extension_port = state.extension_port;
-    let app = Router::new().route("/", get(ws_handler)).with_state(state);
+    let app = build_ws_router(state);
     let addr: SocketAddr = format!("{HOST}:{extension_port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("WebSocket server running on ws://{addr}");
@@ -410,8 +487,30 @@ async fn run_ws_server(state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+fn is_allowed_extension_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Some(extension_id) = origin.strip_prefix(CHROME_EXTENSION_ORIGIN_PREFIX) else {
+        return false;
+    };
+    extension_id.len() == 32 && extension_id.bytes().all(|byte| matches!(byte, b'a'..=b'p'))
+}
+
+async fn ws_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !is_allowed_extension_origin(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "WebSocket connections require a Chrome extension Origin",
+        )
+            .into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
 }
 
 async fn monitor_idle_shutdown(state: AppState) {
@@ -461,6 +560,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 }
 
+fn should_set_default_session(driver: &DriverState, session_key: &str) -> bool {
+    match driver.preferred_default_session_key.as_deref() {
+        Some(preferred) => preferred == session_key,
+        None => driver.default_session_key.is_none(),
+    }
+}
+
 async fn handle_ws_message(
     incoming: WsIncoming,
     state: &AppState,
@@ -473,12 +579,16 @@ async fn handle_ws_message(
             browser_id,
             profile_id,
             profile_label,
+            extension_version,
+            file_scheme_access,
             tabs,
         }
         | WsIncoming::TabsUpdate {
             browser_id,
             profile_id,
             profile_label,
+            extension_version,
+            file_scheme_access,
             tabs,
         } => {
             let current: std::collections::HashSet<String> = tabs
@@ -505,8 +615,11 @@ async fn handle_ws_message(
                     registered_ids.push(session_key.clone());
                 }
                 driver.latest_session_key = Some(session_key.clone());
-                if driver.default_session_key.is_none() {
+                if should_set_default_session(&driver, &session_key) {
                     driver.default_session_key = Some(session_key.clone());
+                    if driver.preferred_default_session_key.as_deref() == Some(&session_key) {
+                        driver.preferred_default_session_key = None;
+                    }
                 }
                 driver.sessions.insert(
                     session_key.clone(),
@@ -516,6 +629,8 @@ async fn handle_ws_message(
                         browser_id: browser_id.clone(),
                         profile_id: profile_id.clone(),
                         profile_label: profile_label.clone(),
+                        extension_version: extension_version.clone(),
+                        file_scheme_access,
                         info,
                         sender: sender.clone(),
                         disconnected_at: None,
@@ -572,6 +687,7 @@ async fn root() -> &'static str {
 async fn health(State(state): State<AppState>) -> Json<Value> {
     let active_tabs_count = active_tabs(&state, false).await.len();
     let extension_connected = has_extension_connection(&state).await;
+    let profile_capabilities = extension_profile_capabilities(&state).await;
     let ready = extension_connected && active_tabs_count > 0;
     let uptime = state
         .started_at
@@ -597,7 +713,8 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         },
         "connection": {
             "extension_connected": extension_connected,
-            "active_tabs": active_tabs_count
+            "active_tabs": active_tabs_count,
+            "profiles": profile_capabilities
         },
         "uptime": uptime,
         "idle_for": idle_for,
@@ -961,27 +1078,208 @@ async fn exec(State(state): State<AppState>, Json(req): Json<ExecRequest>) -> Js
 
 async fn open_tab(State(state): State<AppState>, Json(req): Json<OpenRequest>) -> Json<Value> {
     touch(&state).await;
+    let target = match resolve_request_target(req.target.as_deref(), req.url.as_deref()) {
+        Ok(target) => target,
+        Err(err) => return Json(open_target_error_json(err)),
+    };
+    let resolved = match resolve_open_target(target, req.cwd.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(err) => return Json(open_target_error_json(err)),
+    };
+    let mut selector = SessionSelector::new(req.switch_tab_id, req.browser, req.profile);
+
+    if resolved.kind == TargetKind::LocalResource
+        && (!req.readiness_timeout.is_finite() || req.readiness_timeout <= 0.0)
+    {
+        return Json(json!({
+            "ok": false,
+            "error": "File readiness timeout must be a finite number greater than zero",
+            "error_code": "invalid_readiness_timeout",
+            "details": { "readiness_timeout": req.readiness_timeout }
+        }));
+    }
+
+    if resolved.kind == TargetKind::LocalResource {
+        let status_payload = json!({ "cmd": "status" }).to_string();
+        let status_result =
+            match execute_page_js(&state, &status_payload, selector.clone(), true).await {
+                Ok(value) => value,
+                Err(err) => {
+                    return Json(json!({
+                        "ok": false,
+                        "error": format!("Could not query extension file capability: {err}"),
+                        "error_code": "extension_upgrade_required",
+                        "details": { "minimum_extension_version": "2.1" }
+                    }))
+                }
+            };
+        if let Some(executor_session_key) = status_result.get("session_key").and_then(Value::as_str)
+        {
+            selector = SessionSelector::new(Some(executor_session_key.to_string()), None, None);
+        }
+        let status = status_result
+            .get("js_return")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let installed_version = status
+            .get("extensionVersion")
+            .and_then(Value::as_str)
+            .unwrap_or("0");
+        if !version_at_least(installed_version, "2.1") {
+            return Json(json!({
+                "ok": false,
+                "error": format!("Agent Browser CLI Bridge {installed_version} does not support local files; version 2.1 or newer is required"),
+                "error_code": "extension_upgrade_required",
+                "details": {
+                    "installed_extension_version": installed_version,
+                    "minimum_extension_version": "2.1"
+                }
+            }));
+        }
+        if status.get("fileSchemeAccess").and_then(Value::as_bool) != Some(true) {
+            return Json(json!({
+                "ok": false,
+                "error": "Agent Browser CLI Bridge is not allowed to access file URLs",
+                "error_code": "file_scheme_access_denied",
+                "details": {
+                    "extension_id": status.get("extensionId").cloned().unwrap_or(Value::Null),
+                    "instructions": [
+                        "Open chrome://extensions",
+                        "Select Agent Browser CLI Bridge",
+                        "Enable Allow access to file URLs"
+                    ]
+                }
+            }));
+        }
+    }
+
     let group_title = req.group_title.or(req.session);
     let payload = json!({
         "cmd": "openTab",
-        "url": normalize_url(&req.url),
+        "url": resolved.navigation_url.clone(),
         "active": req.active,
         "window": req.window,
         "allowFocus": req.allow_focus,
         "groupTitle": group_title,
     })
     .to_string();
-    let result = execute_page_js(
-        &state,
-        &payload,
-        SessionSelector::new(req.switch_tab_id, req.browser, req.profile),
-        true,
-    )
-    .await;
-    Json(match result {
-        Ok(value) => json!({ "ok": true, "result": normalize_open_result(&state, value).await }),
-        Err(err) => json!({ "ok": false, "error": err.to_string() }),
+    let value = match execute_page_js(&state, &payload, selector, true).await {
+        Ok(value) => value,
+        Err(err) => return Json(json!({ "ok": false, "error": err.to_string() })),
+    };
+    let result = normalize_open_result(&state, value.clone()).await;
+    let opened_tab_id = result
+        .get("opened_tab_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let expected_session_key = result
+        .get("opened_session_key")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    if resolved.kind == TargetKind::LocalResource {
+        let ready = if let Some(key) = expected_session_key.as_deref() {
+            wait_for_session_key(&state, key, req.readiness_timeout).await
+        } else {
+            false
+        };
+        if !ready {
+            return Json(json!({
+                "ok": false,
+                "error": format!("File tab was created but did not become controllable within {} seconds", req.readiness_timeout),
+                "error_code": "file_tab_readiness_timeout",
+                "opened_tab_id": opened_tab_id,
+                "opened_session_key": expected_session_key,
+                "details": {
+                    "timeout_seconds": req.readiness_timeout,
+                    "tab_preserved": true,
+                    "navigation_url": resolved.navigation_url
+                }
+            }));
+        }
+    }
+
+    if req.active {
+        let mut driver = state.driver.lock().await;
+        if let Some(key) = expected_session_key.clone() {
+            if driver.sessions.get(&key).is_some_and(Session::is_active) {
+                driver.default_session_key = Some(key);
+                driver.preferred_default_session_key = None;
+            } else {
+                driver.preferred_default_session_key = Some(key);
+            }
+        }
+    }
+    Json(json!({ "ok": true, "result": result }))
+}
+
+fn resolve_request_target<'a>(
+    target: Option<&'a str>,
+    url: Option<&'a str>,
+) -> Result<&'a str, OpenTargetError> {
+    match (target, url) {
+        (Some(target), Some(url)) if target != url => Err(OpenTargetError {
+            code: "ambiguous_open_target",
+            message: "Open request contains conflicting target and url fields".to_string(),
+            details: json!({ "target": target, "url": url }),
+        }),
+        (Some(target), _) => Ok(target),
+        (_, Some(url)) => Ok(url),
+        (None, None) => Err(OpenTargetError {
+            code: "missing_open_target",
+            message: "Open request requires target or url".to_string(),
+            details: json!({}),
+        }),
+    }
+}
+
+fn open_target_error_json(err: OpenTargetError) -> Value {
+    json!({
+        "ok": false,
+        "error": err.message,
+        "error_code": err.code,
+        "details": err.details,
     })
+}
+
+fn version_at_least(installed: &str, minimum: &str) -> bool {
+    let parse = |value: &str| {
+        value
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    let mut installed = parse(installed);
+    let mut minimum = parse(minimum);
+    let len = installed.len().max(minimum.len());
+    installed.resize(len, 0);
+    minimum.resize(len, 0);
+    installed >= minimum
+}
+
+async fn wait_for_session_key(state: &AppState, session_key: &str, timeout: f64) -> bool {
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.1));
+    loop {
+        {
+            let driver = state.driver.lock().await;
+            if driver
+                .sessions
+                .get(session_key)
+                .is_some_and(Session::is_active)
+            {
+                return true;
+            }
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        tokio::select! {
+            _ = state.sessions_ready.notified() => {}
+            _ = tokio::time::sleep(remaining.min(Duration::from_millis(100))) => {}
+        }
+    }
 }
 
 async fn normalize_open_result(state: &AppState, value: Value) -> Value {
@@ -996,11 +1294,10 @@ async fn normalize_open_result(state: &AppState, value: Value) -> Value {
         .and_then(Value::as_str)
         .map(str::to_string);
     let opened_session_key = if let Some(tab_id) = opened_tab_id.as_deref() {
-        find_session_key_by_tab_id(state, tab_id).await.or_else(|| {
-            executor_session_key
-                .as_deref()
-                .and_then(|key| derive_session_key(key, tab_id))
-        })
+        match executor_session_key.as_deref() {
+            Some(executor_key) => derive_session_key(executor_key, tab_id),
+            None => find_unique_session_key_by_tab_id(state, tab_id).await,
+        }
     } else {
         None
     };
@@ -1024,19 +1321,28 @@ async fn normalize_open_result(state: &AppState, value: Value) -> Value {
     })
 }
 
-async fn find_session_key_by_tab_id(state: &AppState, tab_id: &str) -> Option<String> {
+async fn find_unique_session_key_by_tab_id(state: &AppState, tab_id: &str) -> Option<String> {
     let driver = state.driver.lock().await;
-    driver
+    let mut matches = driver
         .sessions
         .values()
-        .find(|session| session.is_active() && session.tab_id == tab_id)
-        .map(|session| session.session_key.clone())
+        .filter(|session| session.is_active() && session.tab_id == tab_id)
+        .map(|session| session.session_key.clone());
+    let session_key = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(session_key)
 }
 
 fn derive_session_key(executor_session_key: &str, opened_tab_id: &str) -> Option<String> {
     let mut parts = executor_session_key.splitn(3, ':');
     let browser_id = parts.next()?;
     let profile_id = parts.next()?;
+    let executor_tab_id = parts.next()?;
+    if browser_id.is_empty() || profile_id.is_empty() || executor_tab_id.is_empty() {
+        return None;
+    }
     Some(crate::protocol::make_session_key(
         browser_id,
         profile_id,
@@ -1306,6 +1612,36 @@ async fn active_tabs_filtered(
         .collect())
 }
 
+async fn extension_profile_capabilities(state: &AppState) -> Vec<Value> {
+    let driver = state.driver.lock().await;
+    let mut profiles: HashMap<(String, String), Value> = HashMap::new();
+    for session in driver
+        .sessions
+        .values()
+        .filter(|session| session.is_active())
+    {
+        profiles
+            .entry((session.browser_id.clone(), session.profile_id.clone()))
+            .or_insert_with(|| {
+                json!({
+                    "browser_id": session.browser_id,
+                    "profile_id": session.profile_id,
+                    "profile_label": session.profile_label,
+                    "extension_version": session.extension_version,
+                    "file_scheme_access": session.file_scheme_access,
+                })
+            });
+    }
+    let mut values: Vec<Value> = profiles.into_values().collect();
+    values.sort_by(|a, b| {
+        a.get("profile_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .cmp(b.get("profile_id").and_then(Value::as_str).unwrap_or(""))
+    });
+    values
+}
+
 async fn has_extension_connection(state: &AppState) -> bool {
     let driver = state.driver.lock().await;
     driver
@@ -1383,10 +1719,7 @@ async fn execute_page_js(
     selector: SessionSelector,
     no_monitor: bool,
 ) -> Result<Value> {
-    if selector.tab_id.is_some() || selector.browser.is_some() || selector.profile.is_some() {
-        let session_key = select_tab(state, selector.clone()).await?;
-        state.driver.lock().await.default_session_key = Some(session_key);
-    }
+    let executor_session_key = select_tab(state, selector).await?;
     let before = if no_monitor {
         None
     } else {
@@ -1397,13 +1730,16 @@ async fn execute_page_js(
         .into_iter()
         .map(|t| t.session_key)
         .collect();
-    let response = execute_raw_js(state, script, Duration::from_secs(15)).await?;
-    let current_session_key = state.driver.lock().await.default_session_key.clone();
-    let current_tab_id = if let Some(key) = current_session_key.as_deref() {
-        session_tab_id(state, key).await.ok()
-    } else {
-        None
-    };
+    let execution = execute_raw_js_with_session(
+        state,
+        script,
+        Duration::from_secs(15),
+        Some(&executor_session_key),
+    )
+    .await?;
+    let current_session_key = execution.session_key;
+    let current_tab_id = execution.tab_id;
+    let response = execution.result;
     let mut result = json!({
         "status": "success",
         "js_return": response.data.or(response.result).unwrap_or(Value::Null),
@@ -1433,37 +1769,63 @@ async fn execute_page_js(
     Ok(result)
 }
 
+struct ExecWithSession {
+    result: ExecResult,
+    session_key: String,
+    tab_id: String,
+}
+
 async fn execute_raw_js(state: &AppState, code: &str, timeout: Duration) -> Result<ExecResult> {
+    Ok(execute_raw_js_with_session(state, code, timeout, None)
+        .await?
+        .result)
+}
+
+async fn execute_raw_js_with_session(
+    state: &AppState,
+    code: &str,
+    timeout: Duration,
+    requested_session_key: Option<&str>,
+) -> Result<ExecWithSession> {
     let (session_key, tab_id, sender) = {
         wait_for_sessions(state, Duration::from_secs(5)).await;
         let driver = state.driver.lock().await;
-        let session_key = driver
-            .default_session_key
-            .as_ref()
-            .and_then(|key| {
-                driver
-                    .sessions
-                    .get(key)
-                    .filter(|s| s.is_active())
-                    .map(|s| s.session_key.clone())
-            })
-            .or_else(|| {
-                driver.latest_session_key.as_ref().and_then(|key| {
+        let session_key = if let Some(requested) = requested_session_key {
+            driver
+                .sessions
+                .get(requested)
+                .filter(|session| session.is_active())
+                .map(|session| session.session_key.clone())
+                .ok_or_else(|| anyhow!("会话ID {requested} 未连接"))?
+        } else {
+            driver
+                .default_session_key
+                .as_ref()
+                .and_then(|key| {
                     driver
                         .sessions
                         .get(key)
                         .filter(|s| s.is_active())
                         .map(|s| s.session_key.clone())
                 })
-            })
-            .or_else(|| {
-                driver
-                    .sessions
-                    .values()
-                    .find(|s| s.is_active())
-                    .map(|s| s.session_key.clone())
-            })
-            .ok_or_else(|| anyhow!("没有可用的浏览器标签页，查L3记忆分析原因。"))?;
+                .or_else(|| {
+                    driver.latest_session_key.as_ref().and_then(|key| {
+                        driver
+                            .sessions
+                            .get(key)
+                            .filter(|s| s.is_active())
+                            .map(|s| s.session_key.clone())
+                    })
+                })
+                .or_else(|| {
+                    driver
+                        .sessions
+                        .values()
+                        .find(|s| s.is_active())
+                        .map(|s| s.session_key.clone())
+                })
+                .ok_or_else(|| anyhow!("没有可用的浏览器标签页，查L3记忆分析原因。"))?
+        };
         let session = driver
             .sessions
             .get(&session_key)
@@ -1492,7 +1854,7 @@ async fn execute_raw_js(state: &AppState, code: &str, timeout: Duration) -> Resu
     sender
         .send(payload)
         .map_err(|_| anyhow!("浏览器扩展连接已断开"))?;
-    match tokio::time::timeout(timeout, rx).await {
+    let result = match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(value)) => value,
         Ok(Err(_)) => Err(anyhow!("执行结果通道已关闭")),
         Err(_) => {
@@ -1522,7 +1884,12 @@ async fn execute_raw_js(state: &AppState, code: &str, timeout: Duration) -> Resu
                 })
             }
         }
-    }
+    }?;
+    Ok(ExecWithSession {
+        result,
+        session_key,
+        tab_id,
+    })
 }
 
 async fn get_html(
@@ -1623,14 +1990,6 @@ return {{ result: __mainResult, wait: {{ ok: __matched, matched: __matched, valu
         timeout_ms = (timeout.max(0.0) * 1000.0) as u64,
         interval_ms = ((interval.max(0.02)) * 1000.0) as u64,
     )
-}
-
-fn normalize_url(url: &str) -> String {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        url.to_string()
-    } else {
-        format!("https://{url}")
-    }
 }
 
 async fn touch(state: &AppState) {
@@ -2928,11 +3287,12 @@ fn parse_key_segment(segment: &str, platform: &str) -> Result<KeySegment> {
         modifiers.push(spec);
     }
     let mut key = key_spec(parts[parts.len() - 1])?;
-    if modifier_bits & 8 != 0 {
-        if key.key.len() == 1 && key.key.chars().all(|c| c.is_ascii_lowercase()) {
-            key.key = key.key.to_uppercase();
-            key.text = key.text.as_ref().map(|_| key.key.clone());
-        }
+    if modifier_bits & 8 != 0
+        && key.key.len() == 1
+        && key.key.chars().all(|c| c.is_ascii_lowercase())
+    {
+        key.key = key.key.to_uppercase();
+        key.text = key.text.as_ref().map(|_| key.key.clone());
     }
     Ok(KeySegment {
         modifiers,
@@ -3117,13 +3477,7 @@ fn ax_string(value: &Option<AxValue>) -> Option<String> {
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        if value.trim().is_empty() {
-            None
-        } else {
-            Some(value)
-        }
-    })
+    value.filter(|value| !value.trim().is_empty())
 }
 
 fn truncate_text(value: &str, max: usize) -> String {
@@ -3660,4 +4014,359 @@ fn decode_base64(input: &str) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn test_state() -> AppState {
+        let (shutdown, _shutdown_rx) = mpsc::unbounded_channel();
+        AppState {
+            driver: Arc::new(Mutex::new(DriverState::default())),
+            started_at: SystemTime::now(),
+            last_activity: Arc::new(Mutex::new(Instant::now())),
+            shutdown,
+            sessions_ready: Arc::new(Notify::new()),
+            extension_port: config::DEFAULT_EXTENSION_PORT,
+            api_token: "test-token".to_string(),
+        }
+    }
+
+    fn insert_test_session(
+        driver: &mut DriverState,
+        browser_id: &str,
+        profile_id: &str,
+        tab_id: &str,
+    ) -> mpsc::UnboundedReceiver<String> {
+        let session_key = crate::protocol::make_session_key(browser_id, profile_id, tab_id);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        driver.sessions.insert(
+            session_key.clone(),
+            Session {
+                session_key: session_key.clone(),
+                tab_id: tab_id.to_string(),
+                browser_id: browser_id.to_string(),
+                profile_id: profile_id.to_string(),
+                profile_label: None,
+                extension_version: Some("2.1".to_string()),
+                file_scheme_access: Some(true),
+                info: TabInfo {
+                    id: tab_id.to_string(),
+                    tab_id: tab_id.to_string(),
+                    browser_id: browser_id.to_string(),
+                    profile_id: profile_id.to_string(),
+                    profile_label: None,
+                    session_key,
+                    url: "https://example.com".to_string(),
+                    title: "test".to_string(),
+                    tab_type: "ext_ws".to_string(),
+                    connected_at: None,
+                },
+                sender,
+                disconnected_at: None,
+            },
+        );
+        receiver
+    }
+
+    #[test]
+    fn api_access_requires_token_and_rejects_foreign_origins() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            config::API_TOKEN_HEADER,
+            HeaderValue::from_static("test-token"),
+        );
+        assert!(validate_api_access(&headers, "test-token").is_ok());
+
+        headers.insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
+        let error = validate_api_access(&headers, "test-token").unwrap_err();
+        assert_eq!(error.0, StatusCode::FORBIDDEN);
+        assert_eq!(error.1, "origin_not_allowed");
+
+        headers.insert(ORIGIN, HeaderValue::from_static(LOOPBACK_API_ORIGIN));
+        assert!(validate_api_access(&headers, "test-token").is_ok());
+        headers.remove(config::API_TOKEN_HEADER);
+        let error = validate_api_access(&headers, "test-token").unwrap_err();
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(error.1, "invalid_api_token");
+    }
+
+    #[test]
+    fn websocket_origin_requires_a_valid_chrome_extension_id() {
+        let mut headers = HeaderMap::new();
+        assert!(!is_allowed_extension_origin(&headers));
+
+        headers.insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert!(!is_allowed_extension_origin(&headers));
+
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+        );
+        assert!(is_allowed_extension_origin(&headers));
+
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static(
+                "chrome-extension://abcdefghijklmnopabcdefghijklmnop.example.com",
+            ),
+        );
+        assert!(!is_allowed_extension_origin(&headers));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn websocket_router_rejects_missing_and_non_extension_origins() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, build_ws_router(test_state()))
+                .await
+                .unwrap();
+        });
+
+        let status_lines = tokio::task::spawn_blocking(move || {
+            use std::io::{BufRead, BufReader, Write};
+
+            let handshake = |origin: Option<&str>| {
+                let mut stream = std::net::TcpStream::connect(addr).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let origin_header = origin
+                    .map(|value| format!("Origin: {value}\r\n"))
+                    .unwrap_or_default();
+                let request = format!(
+                    "GET / HTTP/1.1\r\n\
+                     Host: {addr}\r\n\
+                     Upgrade: websocket\r\n\
+                     Connection: Upgrade\r\n\
+                     Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                     Sec-WebSocket-Version: 13\r\n\
+                     {origin_header}\r\n"
+                );
+                stream.write_all(request.as_bytes()).unwrap();
+                stream.flush().unwrap();
+                let mut status_line = String::new();
+                BufReader::new(stream).read_line(&mut status_line).unwrap();
+                status_line
+            };
+
+            (
+                handshake(None),
+                handshake(Some("https://evil.example")),
+                handshake(Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop")),
+            )
+        })
+        .await
+        .unwrap();
+        server.abort();
+        let _ = server.await;
+
+        assert!(status_lines.0.starts_with("HTTP/1.1 403 Forbidden"));
+        assert!(status_lines.1.starts_with("HTTP/1.1 403 Forbidden"));
+        assert!(status_lines
+            .2
+            .starts_with("HTTP/1.1 101 Switching Protocols"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn api_router_enforces_token_and_origin_checks() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, build_api_router(test_state()))
+                .await
+                .unwrap();
+        });
+
+        let responses = tokio::task::spawn_blocking(move || {
+            let client = reqwest::blocking::Client::new();
+            let url = format!("http://{addr}/health");
+            let send = |token: Option<&str>, origin: Option<&str>| {
+                let mut request = client.get(&url);
+                if let Some(token) = token {
+                    request = request.header(config::API_TOKEN_HEADER, token);
+                }
+                if let Some(origin) = origin {
+                    request = request.header("origin", origin);
+                }
+                let response = request.send().unwrap();
+                let status = response.status();
+                let body = response.json::<Value>().unwrap();
+                (status, body)
+            };
+            (
+                send(None, None),
+                send(Some("wrong-token"), None),
+                send(Some("test-token"), Some("https://evil.example")),
+                send(Some("test-token"), None),
+            )
+        })
+        .await
+        .unwrap();
+        server.abort();
+        let _ = server.await;
+
+        assert_eq!(responses.0 .0, StatusCode::UNAUTHORIZED);
+        assert_eq!(responses.0 .1["error_code"], "invalid_api_token");
+        assert_eq!(responses.1 .0, StatusCode::UNAUTHORIZED);
+        assert_eq!(responses.1 .1["error_code"], "invalid_api_token");
+        assert_eq!(responses.2 .0, StatusCode::FORBIDDEN);
+        assert_eq!(responses.2 .1["error_code"], "origin_not_allowed");
+        assert_eq!(responses.3 .0, StatusCode::OK);
+        assert_eq!(responses.3 .1["running"], true);
+    }
+
+    #[tokio::test]
+    async fn open_result_uses_executor_scope_when_browser_tab_ids_overlap() {
+        let state = test_state();
+        {
+            let mut driver = state.driver.lock().await;
+            let _receiver_a = insert_test_session(&mut driver, "browser-a", "profile-a", "7");
+            let _receiver_b = insert_test_session(&mut driver, "browser-b", "profile-b", "42");
+        }
+
+        let result = normalize_open_result(
+            &state,
+            json!({
+                "js_return": { "id": 42 },
+                "tab_id": "7",
+                "session_key": "browser-a:profile-a:7"
+            }),
+        )
+        .await;
+        assert_eq!(
+            result.get("opened_session_key").and_then(Value::as_str),
+            Some("browser-a:profile-a:42")
+        );
+    }
+
+    #[tokio::test]
+    async fn open_result_refuses_ambiguous_tab_id_without_executor_scope() {
+        let state = test_state();
+        {
+            let mut driver = state.driver.lock().await;
+            let _receiver_a = insert_test_session(&mut driver, "browser-a", "profile-a", "42");
+            let _receiver_b = insert_test_session(&mut driver, "browser-b", "profile-b", "42");
+        }
+
+        let result = normalize_open_result(&state, json!({ "js_return": { "id": 42 } })).await;
+        assert!(result.get("opened_session_key").is_some_and(Value::is_null));
+    }
+
+    #[tokio::test]
+    async fn page_execution_reports_the_session_that_received_the_command() {
+        let state = test_state();
+        let (mut receiver_a, _receiver_b) = {
+            let mut driver = state.driver.lock().await;
+            let receiver_a = insert_test_session(&mut driver, "browser-a", "profile-a", "7");
+            let receiver_b = insert_test_session(&mut driver, "browser-b", "profile-b", "8");
+            driver.default_session_key = Some("browser-a:profile-a:7".to_string());
+            (receiver_a, receiver_b)
+        };
+
+        let exec_state = state.clone();
+        let execution = tokio::spawn(async move {
+            execute_page_js(
+                &exec_state,
+                "return 1",
+                SessionSelector::new(Some("browser-a:profile-a:7".to_string()), None, None),
+                true,
+            )
+            .await
+        });
+        let payload = tokio::time::timeout(Duration::from_secs(1), receiver_a.recv())
+            .await
+            .expect("command should be dispatched")
+            .expect("browser-a receiver should remain connected");
+        let exec_id = serde_json::from_str::<Value>(&payload)
+            .unwrap()
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+
+        state.driver.lock().await.default_session_key = Some("browser-b:profile-b:8".to_string());
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        handle_ws_message(
+            WsIncoming::Result {
+                id: exec_id,
+                result: json!(1),
+                new_tabs: None,
+            },
+            &state,
+            sender,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let result = execution.await.unwrap().unwrap();
+        assert_eq!(
+            result.get("session_key").and_then(Value::as_str),
+            Some("browser-a:profile-a:7")
+        );
+        assert_eq!(result.get("tab_id").and_then(Value::as_str), Some("7"));
+    }
+
+    #[test]
+    fn pending_default_session_does_not_match_another_browser_tab() {
+        let mut driver = DriverState {
+            preferred_default_session_key: Some("browser-a:profile-a:42".to_string()),
+            ..DriverState::default()
+        };
+        assert!(!should_set_default_session(
+            &driver,
+            "browser-b:profile-b:42"
+        ));
+        assert!(should_set_default_session(
+            &driver,
+            "browser-a:profile-a:42"
+        ));
+        driver.default_session_key = Some("browser-a:profile-a:7".to_string());
+        assert!(should_set_default_session(
+            &driver,
+            "browser-a:profile-a:42"
+        ));
+    }
+
+    #[test]
+    fn request_target_accepts_compatible_fields() {
+        assert_eq!(
+            resolve_request_target(Some("./demo.html"), None).unwrap(),
+            "./demo.html"
+        );
+        assert_eq!(
+            resolve_request_target(None, Some("https://example.com")).unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            resolve_request_target(Some("same"), Some("same")).unwrap(),
+            "same"
+        );
+    }
+
+    #[test]
+    fn request_target_rejects_missing_and_conflicting_fields() {
+        assert_eq!(
+            resolve_request_target(None, None).unwrap_err().code,
+            "missing_open_target"
+        );
+        assert_eq!(
+            resolve_request_target(Some("a"), Some("b"))
+                .unwrap_err()
+                .code,
+            "ambiguous_open_target"
+        );
+    }
+
+    #[test]
+    fn extension_versions_compare_numerically() {
+        assert!(version_at_least("2.1", "2.1"));
+        assert!(version_at_least("2.10", "2.1"));
+        assert!(version_at_least("2.1.1", "2.1"));
+        assert!(!version_at_least("2.0", "2.1"));
+        assert!(!version_at_least("unknown", "2.1"));
+    }
 }
