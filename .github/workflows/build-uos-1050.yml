@@ -1,0 +1,68 @@
+name: build-uos-1050
+
+# Build linux-x64 native binaries inside Debian 10 (glibc 2.28),
+# matching UOS 1050 for offline install.
+#
+# GitHub has no native Debian 10 runner, so we:
+# 1) checkout on ubuntu-22.04
+# 2) compile inside docker.io/library/debian:10
+on:
+  workflow_dispatch:
+    inputs:
+      rust_version:
+        description: "Rust toolchain version"
+        required: false
+        default: "1.88.0"
+      create_release:
+        description: "Create/update GitHub prerelease uos-1050-v<version>-<sha>"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  DEBIAN_IMAGE: debian:10
+  NODE_VERSION: "20.19.3"
+  RUST_VERSION: ${{ inputs.rust_version || '1.88.0' }}
+
+jobs:
+  build-linux-x64-debian10:
+    name: Build linux-x64 on Debian 10
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull Debian 10 image
+        run: docker pull "${DEBIAN_IMAGE}"
+
+      - name: Build inside Debian 10
+        run: |
+          set -euo pipefail
+          chmod +x scripts/build-uos-1050.sh
+          docker run --rm             --user root             -e RUST_VERSION             -e NODE_VERSION             -e GITHUB_SHA             -v "${GITHUB_WORKSPACE}:/src"             -w /src             "${DEBIAN_IMAGE}"             bash /src/scripts/build-uos-1050.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-cli-uos-1050-linux-x64
+          path: dist/uos-1050/**
+          if-no-files-found: error
+
+      - name: Create GitHub prerelease
+        if: ${{ inputs.create_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="uos-1050-v${VERSION}-${GITHUB_SHA::7}"
+          NOTES="Debian 10 / UOS 1050 compatible linux-x64 build of agent-browser-cli ${VERSION} (${GITHUB_SHA})."
+          mapfile -t assets < <(find dist/uos-1050 -type f | sort)
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${TAG}" "${assets[@]}"               --repo "${GITHUB_REPOSITORY}"               --title "${TAG}"               --notes "${NOTES}"               --prerelease
+          fi
