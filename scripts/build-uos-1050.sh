@@ -4,6 +4,14 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 echo "[uos-1050] Installing build dependencies on Debian 10..."
+
+# Debian 10 (buster) is archived; use archive.debian.org
+cat > /etc/apt/sources.list <<'EOF'
+deb http://archive.debian.org/debian buster main contrib non-free
+deb http://archive.debian.org/debian-security buster/updates main contrib non-free
+deb http://archive.debian.org/debian buster-updates main contrib non-free
+EOF
+echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl build-essential pkg-config git python3 file binutils xz-utils unzip zip
