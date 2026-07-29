@@ -101,6 +101,64 @@ selector 不明确或页面复杂时：snapshot 生成 @e，再 click/fill @e
 封装命令失效或覆盖不到特殊页面时：回退 exec / JSON CDP / 自定义 JS
 ```
 
+## 隔离 Playwright 测试
+
+当任务要求无头浏览器、干净登录态、CI 可重复执行、测试其他内网系统或进行
+UI/API 混合功能测试时，使用 `agent-browser-cli pw`。不要复用真实 Chrome，也不要
+先运行默认 `tabs/status`。
+
+先检查 Runtime：
+
+```bash
+agent-browser-cli pw doctor
+```
+
+创建隔离 Session 时必须明确允许访问的 Host：
+
+```bash
+agent-browser-cli pw session create \
+  --name order-test \
+  --base-url https://order.test.intranet \
+  --allow-host order.test.intranet \
+  --allow-host order-api.test.intranet \
+  --trace
+```
+
+页面操作：
+
+```bash
+agent-browser-cli pw open /login --session order-test
+agent-browser-cli pw scan --session order-test
+agent-browser-cli pw snapshot --session order-test
+agent-browser-cli pw fill @e1 tester --session order-test
+agent-browser-cli pw click @e3 --session order-test
+agent-browser-cli pw screenshot --session order-test --full-page
+agent-browser-cli pw trace stop --session order-test
+agent-browser-cli pw session close order-test
+```
+
+`pw snapshot` 的 `@e` 引用只在当前 Session 最近一次快照中有效；页面变化后重新
+快照。原始 JavaScript 默认禁止，只有用户任务确实需要时才逐次添加
+`--allow-raw-javascript`。
+
+API 功能测试：
+
+```bash
+agent-browser-cli pw request https://order-api.test.intranet/health \
+  --allow-host order-api.test.intranet
+
+agent-browser-cli pw request /api/me --session order-test
+```
+
+标准 Playwright Test：
+
+```bash
+agent-browser-cli pw test tests/e2e --cwd .
+```
+
+CLI 探索用于理解和验证流程；需要长期、可重复执行时，将确认后的流程写成标准
+Playwright Test。该能力是功能测试，不用于性能压测。
+
 示例：
 
 ```bash

@@ -28,6 +28,11 @@ task.md
 build/
 dist/
 target/
+node_modules/
+artifacts/
+.playwright/
+playwright-report/
+test-results/
 *.egg-info/
 # Generated npm platform packages
 npm/platform/

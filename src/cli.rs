@@ -55,7 +55,261 @@ enum CommandKind {
     SetExtensionPort(SetExtensionPortArgs),
     Stop,
     Restart,
+    #[command(name = "pw")]
+    Pw(PwCommand),
     Daemon,
+}
+
+#[derive(Debug, Args)]
+struct PwCommand {
+    #[command(subcommand)]
+    action: PwAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum PwAction {
+    Doctor,
+    Session(PwSessionCommand),
+    Open(PwOpenArgs),
+    Content(PwContentArgs),
+    Scan(PwSessionArgs),
+    Snapshot(PwSnapshotArgs),
+    Click(PwTargetArgs),
+    Fill(PwFillArgs),
+    Press(PwPressArgs),
+    Exec(PwExecArgs),
+    Screenshot(PwScreenshotArgs),
+    Pdf(PwPdfArgs),
+    Trace(PwTraceCommand),
+    Request(PwRequestArgs),
+    Test(PwTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct PwSessionCommand {
+    #[command(subcommand)]
+    action: PwSessionAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum PwSessionAction {
+    Create(PwSessionCreateArgs),
+    List,
+    Close(PwSessionNameArgs),
+    #[command(name = "close-all")]
+    CloseAll,
+}
+
+#[derive(Debug, Args)]
+struct PwSessionCreateArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    headed: bool,
+    #[arg(long)]
+    base_url: Option<String>,
+    #[arg(long = "allow-host")]
+    allowed_hosts: Vec<String>,
+    #[arg(long)]
+    ignore_https_errors: bool,
+    #[arg(long, default_value = "zh-CN")]
+    locale: String,
+    #[arg(long, default_value = "Asia/Shanghai")]
+    timezone: String,
+    #[arg(long, default_value_t = 1440)]
+    viewport_width: u32,
+    #[arg(long, default_value_t = 900)]
+    viewport_height: u32,
+    #[arg(long)]
+    proxy_server: Option<String>,
+    #[arg(long)]
+    proxy_bypass: Option<String>,
+    #[arg(long)]
+    trace: bool,
+    #[arg(long, default_value_t = 60.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwSessionNameArgs {
+    name: String,
+}
+
+#[derive(Debug, Args)]
+struct PwSessionArgs {
+    #[arg(long)]
+    session: String,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwOpenArgs {
+    target: String,
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    new_page: bool,
+    #[arg(long, default_value = "domcontentloaded")]
+    wait_until: String,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwContentArgs {
+    file: PathBuf,
+    #[arg(long)]
+    session: String,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwSnapshotArgs {
+    #[arg(long)]
+    session: String,
+    #[arg(long, default_value_t = 200)]
+    limit: usize,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwTargetArgs {
+    target: String,
+    #[arg(long)]
+    session: String,
+    #[arg(long, default_value_t = 15.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwFillArgs {
+    target: String,
+    value: String,
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    append: bool,
+    #[arg(long, default_value_t = 15.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwPressArgs {
+    keys: String,
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long, default_value_t = 15.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwExecArgs {
+    script: String,
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    allow_raw_javascript: bool,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwScreenshotArgs {
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    filename: Option<String>,
+    #[arg(long)]
+    full_page: bool,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwPdfArgs {
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    filename: Option<String>,
+    #[arg(long, default_value = "A4")]
+    paper: String,
+    #[arg(long)]
+    landscape: bool,
+    #[arg(long)]
+    no_print_background: bool,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwTraceCommand {
+    #[command(subcommand)]
+    action: PwTraceAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum PwTraceAction {
+    Start(PwSessionArgs),
+    Stop(PwTraceStopArgs),
+}
+
+#[derive(Debug, Args)]
+struct PwTraceStopArgs {
+    #[arg(long)]
+    session: String,
+    #[arg(long)]
+    filename: Option<String>,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwRequestArgs {
+    target: String,
+    #[arg(long, default_value = "GET")]
+    method: String,
+    #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
+    base_url: Option<String>,
+    #[arg(long = "allow-host")]
+    allowed_hosts: Vec<String>,
+    #[arg(long = "header")]
+    headers: Vec<String>,
+    #[arg(long)]
+    data: Option<String>,
+    #[arg(long)]
+    isolated_cookies: bool,
+    #[arg(long)]
+    ignore_https_errors: bool,
+    #[arg(long, default_value_t = 1_048_576)]
+    body_limit: usize,
+    #[arg(long, default_value_t = 30.0)]
+    timeout: f64,
+}
+
+#[derive(Debug, Args)]
+struct PwTestArgs {
+    path: Option<String>,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<String>,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    grep: Option<String>,
+    #[arg(long)]
+    report_dir: Option<PathBuf>,
+    #[arg(long, default_value = "line")]
+    reporter: String,
+    #[arg(long, default_value_t = 3600.0)]
+    timeout: f64,
 }
 
 #[derive(Debug, Args)]
@@ -658,7 +912,269 @@ pub fn run() -> Result<()> {
             print_json(request("GET", "/health", None, 3.0)?);
             Ok(())
         }
+        CommandKind::Pw(args) => run_pw_command(args),
     }
+}
+
+fn run_pw_command(command: PwCommand) -> Result<()> {
+    let (method, params, timeout, fail_when_false) = match command.action {
+        PwAction::Doctor => ("runtime.health", json!({}), 30.0, false),
+        PwAction::Session(command) => match command.action {
+            PwSessionAction::Create(args) => (
+                "session.create",
+                json!({
+                    "name": args.name,
+                    "headless": !args.headed,
+                    "baseUrl": args.base_url,
+                    "allowedHosts": args.allowed_hosts,
+                    "ignoreHTTPSErrors": args.ignore_https_errors,
+                    "locale": args.locale,
+                    "timezone": args.timezone,
+                    "viewportWidth": args.viewport_width,
+                    "viewportHeight": args.viewport_height,
+                    "proxyServer": args.proxy_server,
+                    "proxyBypass": args.proxy_bypass,
+                    "trace": args.trace,
+                }),
+                args.timeout,
+                false,
+            ),
+            PwSessionAction::List => ("session.list", json!({}), 30.0, false),
+            PwSessionAction::Close(args) => {
+                ("session.close", json!({ "name": args.name }), 30.0, false)
+            }
+            PwSessionAction::CloseAll => ("session.closeAll", json!({}), 60.0, false),
+        },
+        PwAction::Open(args) => (
+            "page.open",
+            json!({
+                "session": args.session,
+                "target": args.target,
+                "newPage": args.new_page,
+                "waitUntil": args.wait_until,
+                "timeoutMs": seconds_to_millis(args.timeout)?,
+            }),
+            args.timeout + 5.0,
+            false,
+        ),
+        PwAction::Content(args) => (
+            "page.setContent",
+            json!({
+                "session": args.session,
+                "html": fs::read_to_string(&args.file).with_context(|| {
+                    format!("读取页面文件失败: {}", args.file.display())
+                })?,
+                "timeoutMs": seconds_to_millis(args.timeout)?,
+            }),
+            args.timeout + 5.0,
+            false,
+        ),
+        PwAction::Scan(args) => (
+            "page.scan",
+            json!({ "session": args.session }),
+            args.timeout,
+            false,
+        ),
+        PwAction::Snapshot(args) => (
+            "page.snapshot",
+            json!({ "session": args.session, "limit": args.limit }),
+            args.timeout,
+            false,
+        ),
+        PwAction::Click(args) => (
+            "page.click",
+            json!({
+                "session": args.session,
+                "target": args.target,
+                "timeoutMs": seconds_to_millis(args.timeout)?,
+            }),
+            args.timeout + 5.0,
+            false,
+        ),
+        PwAction::Fill(args) => (
+            "page.fill",
+            json!({
+                "session": args.session,
+                "target": args.target,
+                "value": args.value,
+                "append": args.append,
+                "timeoutMs": seconds_to_millis(args.timeout)?,
+            }),
+            args.timeout + 5.0,
+            false,
+        ),
+        PwAction::Press(args) => (
+            "page.press",
+            json!({
+                "session": args.session,
+                "target": args.target,
+                "keys": args.keys,
+                "timeoutMs": seconds_to_millis(args.timeout)?,
+            }),
+            args.timeout + 5.0,
+            false,
+        ),
+        PwAction::Exec(args) => (
+            "page.evaluate",
+            json!({
+                "session": args.session,
+                "script": args.script,
+                "allowRawJavascript": args.allow_raw_javascript,
+            }),
+            args.timeout,
+            false,
+        ),
+        PwAction::Screenshot(args) => (
+            "page.screenshot",
+            json!({
+                "session": args.session,
+                "filename": args.filename,
+                "fullPage": args.full_page,
+            }),
+            args.timeout,
+            false,
+        ),
+        PwAction::Pdf(args) => (
+            "page.pdf",
+            json!({
+                "session": args.session,
+                "filename": args.filename,
+                "paper": args.paper,
+                "landscape": args.landscape,
+                "printBackground": !args.no_print_background,
+            }),
+            args.timeout,
+            false,
+        ),
+        PwAction::Trace(command) => match command.action {
+            PwTraceAction::Start(args) => (
+                "trace.start",
+                json!({ "session": args.session }),
+                args.timeout,
+                false,
+            ),
+            PwTraceAction::Stop(args) => (
+                "trace.stop",
+                json!({ "session": args.session, "filename": args.filename }),
+                args.timeout,
+                false,
+            ),
+        },
+        PwAction::Request(args) => {
+            let headers = parse_headers(&args.headers)?;
+            let data = args
+                .data
+                .map(|data| serde_json::from_str::<Value>(&data).unwrap_or(Value::String(data)));
+            (
+                "request.fetch",
+                json!({
+                    "session": args.session,
+                    "target": args.target,
+                    "method": args.method,
+                    "baseUrl": args.base_url,
+                    "allowedHosts": args.allowed_hosts,
+                    "headers": headers,
+                    "data": data,
+                    "shareBrowserCookies": !args.isolated_cookies,
+                    "ignoreHTTPSErrors": args.ignore_https_errors,
+                    "bodyLimit": args.body_limit,
+                    "timeoutMs": seconds_to_millis(args.timeout)?,
+                }),
+                args.timeout + 5.0,
+                false,
+            )
+        }
+        PwAction::Test(args) => {
+            let caller_cwd = env::current_dir().context("无法读取当前工作目录")?;
+            let test_cwd = args.cwd.unwrap_or_else(|| caller_cwd.clone());
+            let test_cwd = if test_cwd.is_absolute() {
+                test_cwd
+            } else {
+                caller_cwd.join(test_cwd)
+            };
+            let report_dir = args.report_dir.map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    caller_cwd.join(path)
+                }
+            });
+            (
+                "test.run",
+                json!({
+                    "path": args.path,
+                    "cwd": test_cwd,
+                    "config": args.config,
+                    "project": args.project,
+                    "grep": args.grep,
+                    "reportDir": report_dir,
+                    "reporter": args.reporter,
+                }),
+                args.timeout,
+                true,
+            )
+        }
+    };
+
+    let value = playwright_call(method, params, timeout)?;
+    print_json(json!({ "ok": true, "result": value }));
+    if fail_when_false && value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(anyhow!(
+            "Playwright 测试失败，exitCode={}",
+            value
+                .get("exitCode")
+                .map(Value::to_string)
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+    Ok(())
+}
+
+fn playwright_call(method: &str, params: Value, timeout: f64) -> Result<Value> {
+    ensure_server()?;
+    let response = request(
+        "POST",
+        "/playwright/call",
+        Some(json!({ "method": method, "params": params })),
+        timeout,
+    )?;
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(anyhow!(
+            "{}",
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("Playwright runtime 调用失败")
+        ));
+    }
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| anyhow!("Playwright runtime 响应缺少 result"))
+}
+
+fn seconds_to_millis(seconds: f64) -> Result<u64> {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(anyhow!("timeout 必须是大于 0 的有限秒数"));
+    }
+    Ok((seconds * 1000.0).round() as u64)
+}
+
+fn parse_headers(headers: &[String]) -> Result<serde_json::Map<String, Value>> {
+    let mut parsed = serde_json::Map::new();
+    for header in headers {
+        let pair = header
+            .split_once('=')
+            .or_else(|| header.split_once(':'))
+            .ok_or_else(|| anyhow!("header 必须使用 KEY=VALUE 或 KEY:VALUE 格式: {header}"))?;
+        let name = pair.0.trim();
+        let value = pair.1.trim();
+        if name.is_empty() {
+            return Err(anyhow!("header 名称不能为空"));
+        }
+        parsed.insert(name.to_string(), json!(value));
+    }
+    Ok(parsed)
 }
 
 fn query_escape(input: &str) -> String {

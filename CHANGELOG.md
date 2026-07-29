@@ -2,6 +2,25 @@
 
 所有重要变更都会记录在这里。日期使用北京时间自然日。
 
+## 未发布
+
+### 新增
+
+- 新增 `agent-browser-cli pw` 隔离 Playwright 运行时，使用固定版本
+  `playwright-core` 和独立 Chromium 进程提供 Session、页面操作、截图、PDF、
+  Trace、API 功能测试和标准 `@playwright/test` 套件执行。
+- 新增 Rust daemon 到 Node Runtime 的本地 JSON-RPC 控制通道；Runtime 懒启动，
+  daemon 退出时关闭全部隔离 Session。
+- 新增网络目标 allowlist、云 metadata/link-local 阻断、原始 JavaScript 显式授权
+  和 artifacts 路径返回。
+- 新增 Playwright Runtime CI 门禁、Linux x64 离线 OCI 构建入口、双语 README、
+  Runtime 架构/离线文档和 Agent Skill 使用说明。
+
+### 验证
+
+- 覆盖 Runtime 策略单测、Rust 全量单测、Clippy、无头 Chromium 页面交互、
+  APIRequestContext、截图、Trace 和标准 Playwright Test 冒烟测试。
+
 ## 已发布
 
 ## v0.3.4 - 2026-05-19

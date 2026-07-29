@@ -1,0 +1,23 @@
+name: build-playwright-offline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build offline image
+        run: bash packaging/playwright/build-container.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-cli-playwright-linux-x64-${{ github.sha }}
+          path: dist/playwright-offline/
+          if-no-files-found: error
+          retention-days: 14

@@ -22,7 +22,9 @@ Browser perception · Page control · Chrome session reuse · CDP · Conditional
 
 `agent-browser-cli` is a browser perception and control tool for agents. It connects to the user's real Chrome browser through a Chrome extension, preserving login state and cookies while providing tab scanning, page JavaScript execution, cookie reading, CDP control, screenshots, file uploads, dropdown clicks, and related capabilities.
 
-This project is not Selenium or Playwright. It is better suited for helping agents read pages accurately and perform actions inside an existing browser session.
+The default Chrome engine is not Selenium or Playwright. It is designed for accurate
+agent interaction inside an existing browser session. For isolated, headless and
+repeatable testing, use the built-in `pw` Playwright runtime.
 
 ## Project Info
 
@@ -234,6 +236,53 @@ agent-browser-cli doctor
 agent-browser-cli logs --tail 100
 agent-browser-cli install-skill --dry-run
 ```
+
+## Isolated Playwright Runtime
+
+In addition to controlling the user's real Chrome, `agent-browser-cli` provides the
+`pw` command family. It launches a separate Chromium process with a temporary user
+profile, so it never reads the user's Chrome cookies or login state. This mode is
+intended for intranet UI/API functional tests, CI and offline deployments.
+
+Install the pinned Chromium and verify the runtime:
+
+```bash
+npm install
+npm run playwright:install
+agent-browser-cli pw doctor
+```
+
+Create and use an isolated session:
+
+```bash
+agent-browser-cli pw session create \
+  --name order-test \
+  --base-url https://order.test.intranet \
+  --allow-host order.test.intranet \
+  --allow-host order-api.test.intranet \
+  --trace
+
+agent-browser-cli pw open /login --session order-test
+agent-browser-cli pw snapshot --session order-test
+agent-browser-cli pw fill @e1 tester --session order-test
+agent-browser-cli pw click @e3 --session order-test
+agent-browser-cli pw trace stop --session order-test
+agent-browser-cli pw session close order-test
+```
+
+Run an API request or a standard Playwright Test suite:
+
+```bash
+agent-browser-cli pw request https://order-api.test.intranet/health \
+  --allow-host order-api.test.intranet
+
+agent-browser-cli pw test tests/e2e --cwd .
+```
+
+Every network target requires an explicit `--allow-host`. Screenshots, traces and
+other artifacts are written under `~/.agent-browser-cli/playwright/artifacts/`.
+See [docs/PLAYWRIGHT-RUNTIME.md](./docs/PLAYWRIGHT-RUNTIME.md) for the architecture,
+security policy, environment variables and offline layout.
 
 ## Update
 

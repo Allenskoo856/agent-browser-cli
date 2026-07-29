@@ -32,3 +32,47 @@ jobs:
       - run: node --check assets/tmwd_cdp_bridge/background.js
       - run: node --check assets/tmwd_cdp_bridge/content.js
       - run: node --check assets/tmwd_cdp_bridge/popup.js
+
+  playwright-runtime:
+    name: Playwright runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run playwright:check
+      - run: npx playwright install --with-deps chromium
+      - run: cargo build --locked
+      - name: Check Playwright runtime
+        env:
+          AGENT_BROWSER_PLAYWRIGHT_RUNTIME: ${{ github.workspace }}/runtime/playwright/src/runtime.mjs
+        run: ./target/debug/agent-browser-cli pw doctor
+      - name: Run Playwright engine integration smoke
+        env:
+          AGENT_BROWSER_CLI_BIN: ${{ github.workspace }}/target/debug/agent-browser-cli
+          AGENT_BROWSER_PLAYWRIGHT_RUNTIME: ${{ github.workspace }}/runtime/playwright/src/runtime.mjs
+        run: bash scripts/test-playwright-runtime.sh
+      - name: Run isolated Playwright smoke suite
+        env:
+          AGENT_BROWSER_PLAYWRIGHT_RUNTIME: ${{ github.workspace }}/runtime/playwright/src/runtime.mjs
+        run: >
+          ./target/debug/agent-browser-cli pw test tests/playwright-runtime
+          --cwd "${GITHUB_WORKSPACE}"
+          --report-dir "${GITHUB_WORKSPACE}/artifacts/playwright-smoke"
+      - name: Stop local daemon
+        if: ${{ always() }}
+        run: ./target/debug/agent-browser-cli stop || true
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-runtime-artifacts
+          path: |
+            artifacts/
+            ~/.agent-browser-cli/playwright/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -22,7 +22,9 @@
 
 `agent-browser-cli` 是一个面向 Agent 的浏览器感知与控制工具。它通过 Chrome 扩展连接用户真实浏览器，保留登录态和 Cookie，提供标签页扫描、页面 JS 执行、Cookie 读取、CDP 控制、截图、文件上传、下拉框点击等能力。
 
-本项目不是 Selenium / Playwright。它更适合在已有浏览器会话中辅助 Agent 精确读取页面和执行操作。
+默认 Chrome 引擎不是 Selenium / Playwright，它更适合在已有浏览器会话中辅助
+Agent 精确读取页面和执行操作。需要完全隔离、无头和可重复测试时，可使用内置的
+`pw` Playwright 运行时。
 
 ## 项目信息
 
@@ -237,6 +239,56 @@ agent-browser-cli doctor
 agent-browser-cli logs --tail 100
 agent-browser-cli install-skill --dry-run
 ```
+
+## 隔离 Playwright 运行时
+
+除复用用户真实 Chrome 外，`agent-browser-cli` 还提供 `pw` 命令族，在独立
+Chromium 进程和临时用户目录中执行无头浏览器操作、API 功能测试和标准
+Playwright Test 套件。该模式不读取用户 Chrome 的 Cookie 或登录态，适合内网
+系统测试、CI 和离线运行。
+
+安装项目依赖和固定版本 Chromium：
+
+```bash
+npm install
+npm run playwright:install
+agent-browser-cli pw doctor
+```
+
+创建隔离会话并操作页面：
+
+```bash
+agent-browser-cli pw session create \
+  --name order-test \
+  --base-url https://order.test.intranet \
+  --allow-host order.test.intranet \
+  --allow-host order-api.test.intranet \
+  --trace
+
+agent-browser-cli pw open /login --session order-test
+agent-browser-cli pw snapshot --session order-test
+agent-browser-cli pw fill @e1 tester --session order-test
+agent-browser-cli pw click @e3 --session order-test
+agent-browser-cli pw screenshot --session order-test --full-page
+agent-browser-cli pw trace stop --session order-test
+agent-browser-cli pw session close order-test
+```
+
+API 功能测试和标准测试套件：
+
+```bash
+agent-browser-cli pw request https://order-api.test.intranet/health \
+  --allow-host order-api.test.intranet
+
+agent-browser-cli pw test tests/e2e --cwd .
+```
+
+所有网络访问必须通过 `--allow-host` 明确授权；云 metadata 和链路本地地址会被
+阻止。Playwright 的 Trace、截图和测试制品默认写入
+`~/.agent-browser-cli/playwright/artifacts/`，CLI 只返回路径和元数据。
+
+完整架构、环境变量和离线部署说明见
+[docs/PLAYWRIGHT-RUNTIME.md](./docs/PLAYWRIGHT-RUNTIME.md)。
 
 ## 更新
 

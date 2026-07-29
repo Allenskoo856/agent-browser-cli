@@ -1,4 +1,5 @@
 use crate::open_target::{resolve_open_target, OpenTargetError, TargetKind};
+use crate::playwright_runtime::PlaywrightRuntime;
 use crate::protocol::{
     DriverState, ElementDomInfo, ElementRef, ExecResult, RectInfo, Session, SnapshotCache, TabInfo,
     WsIncoming,
@@ -42,6 +43,7 @@ pub struct AppState {
     sessions_ready: Arc<Notify>,
     extension_port: u16,
     api_token: String,
+    playwright: Arc<PlaywrightRuntime>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +285,13 @@ struct ConsoleListRequest {
     limit: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct PlaywrightCallRequest {
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
 fn default_active() -> bool {
     true
 }
@@ -359,6 +368,7 @@ pub async fn run_daemon() -> Result<()> {
         sessions_ready: Arc::new(Notify::new()),
         extension_port,
         api_token,
+        playwright: Arc::new(PlaywrightRuntime::default()),
     };
 
     let ws_state = state.clone();
@@ -419,6 +429,7 @@ fn build_api_router(state: AppState) -> Router {
         .route("/console/list", post(console_list))
         .route("/console/clear", post(console_clear))
         .route("/console/stop", post(console_stop))
+        .route("/playwright/call", post(playwright_call))
         .route("/shutdown", post(shutdown))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -721,6 +732,19 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "ttl": ttl,
         "ttl_remaining": (ttl - idle_for).max(0.0)
     }))
+}
+
+async fn playwright_call(
+    State(state): State<AppState>,
+    Json(request): Json<PlaywrightCallRequest>,
+) -> Json<Value> {
+    touch(&state).await;
+    Json(
+        match state.playwright.call(&request.method, request.params).await {
+            Ok(result) => json!({ "ok": true, "result": result }),
+            Err(err) => json!({ "ok": false, "error": err.to_string() }),
+        },
+    )
 }
 
 async fn tabs(State(state): State<AppState>, Query(query): Query<TabsQuery>) -> Json<Value> {
@@ -1408,6 +1432,7 @@ async fn shutdown(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn cleanup_on_shutdown(state: &AppState) -> Value {
+    let playwright_cleanup = state.playwright.shutdown().await;
     let (snapshot_count, pending_count, active_exec_count, sessions) = {
         let mut driver = state.driver.lock().await;
         let snapshot_count = driver.snapshots.len();
@@ -1447,7 +1472,8 @@ async fn cleanup_on_shutdown(state: &AppState) -> Value {
         },
         "plugin": {
             "sent": plugin_results
-        }
+        },
+        "playwright": playwright_cleanup
     })
 }
 
@@ -4031,6 +4057,7 @@ mod tests {
             sessions_ready: Arc::new(Notify::new()),
             extension_port: config::DEFAULT_EXTENSION_PORT,
             api_token: "test-token".to_string(),
+            playwright: Arc::new(PlaywrightRuntime::default()),
         }
     }
 

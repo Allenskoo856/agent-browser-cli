@@ -1,0 +1,21 @@
+{
+  "name": "@sleepinsummer/agent-browser-playwright-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated Playwright runtime for agent-browser-cli.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:integration": "node --test test/*.integration.test.mjs",
+    "check": "node --check src/runtime.mjs && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.62.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

@@ -48,7 +48,7 @@ mkdir -p $(dirname ~/.agent-browser-cli/config.json)
 vi ~/.agent-browser-cli/config.json
 ```
 
-Node requirement: **>= 18 (kit uses Node 20)**
+Node requirement: **>= 20 (kit uses Node 20)**
 
 ## Project notes
 

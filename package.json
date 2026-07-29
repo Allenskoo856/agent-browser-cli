@@ -10,6 +10,8 @@
     "npm/bin",
     "npm/postinstall.js",
     "assets",
+    "docs",
+    "runtime",
     "skills",
     "README.md",
     "README_EN.md",
@@ -19,9 +21,15 @@
   ],
   "scripts": {
     "build": "cargo build --release",
+    "playwright:check": "npm --prefix runtime/playwright run check",
+    "playwright:install": "npm --prefix runtime/playwright exec playwright install chromium",
     "version": "node scripts/sync-optional-deps.mjs && git add package.json package-lock.json",
     "prepack": "node scripts/sync-optional-deps.mjs",
     "postinstall": "node npm/postinstall.js"
+  },
+  "dependencies": {
+    "@playwright/test": "1.62.0",
+    "playwright-core": "1.62.0"
   },
   "optionalDependencies": {
     "@sleepinsummer/agent-browser-cli-darwin-arm64": "0.3.6",
@@ -31,7 +39,7 @@
     "@sleepinsummer/agent-browser-cli-win32-x64": "0.3.6"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "repository": {
     "type": "git",
