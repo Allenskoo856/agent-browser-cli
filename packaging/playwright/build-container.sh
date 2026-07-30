@@ -104,7 +104,7 @@ agent-browser-cli Playwright offline installer ${version}
    cd ${media_name}
    ./install.sh
 4. Verify:
-   agent-browser-playwright doctor
+   agent-browser-cli pw doctor
 
 Requirements: Linux x86_64 and Docker or Podman.
 The installer imports the bundled image; it does not pull from a registry.

@@ -12,16 +12,16 @@ usage() {
 Run the installed containerized Playwright runtime.
 
 Usage:
-  agent-browser-playwright <pw-command> [arguments]
-  agent-browser-playwright --container-status
-  agent-browser-playwright --container-stop
-  agent-browser-playwright --print-container
+  agent-browser-cli pw <command> [arguments]
+  agent-browser-cli pw runtime status
+  agent-browser-cli pw runtime stop
+  agent-browser-cli pw runtime container
 
 Examples:
-  agent-browser-playwright doctor
-  agent-browser-playwright session create --name demo --allow-host app.test.intranet
-  agent-browser-playwright open https://app.test.intranet --session demo
-  agent-browser-playwright test tests/e2e --cwd /workspace/project
+  agent-browser-cli pw doctor
+  agent-browser-cli pw session create --name demo --allow-host app.test.intranet
+  agent-browser-cli pw open https://app.test.intranet --session demo
+  agent-browser-cli pw test tests/e2e --cwd /workspace/project
 
 Environment:
   AGENT_BROWSER_PLAYWRIGHT_HOME         Persistent state directory.
@@ -36,6 +36,14 @@ E2E_* environment variables are forwarded automatically. A runtime container is
 kept per workdir so interactive Playwright sessions survive between commands.
 EOF
 }
+
+if [[ "$#" -eq 0 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+[[ "${1:-}" == "pw" ]] ||
+  fail "this offline runtime only provides 'agent-browser-cli pw'; run --help for usage"
+shift
 
 script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
 install_root="$(CDPATH= cd -- "$(dirname -- "${script_path}")/.." && pwd)"
@@ -52,11 +60,6 @@ done
 [[ -x "${CONTAINER_ENGINE}" ]] || fail "container engine is unavailable: ${CONTAINER_ENGINE}"
 "${CONTAINER_ENGINE}" info >/dev/null 2>&1 ||
   fail "container engine is not running: ${CONTAINER_ENGINE}"
-
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
 
 host_workdir="${AGENT_BROWSER_PLAYWRIGHT_WORKDIR:-${PWD}}"
 [[ -d "${host_workdir}" ]] || fail "workdir does not exist: ${host_workdir}"
@@ -95,27 +98,37 @@ stop_container() {
   fi
 }
 
-case "${1:-}" in
-  --print-container)
-    printf '%s\n' "${container_name}"
-    exit 0
-    ;;
-  --container-status)
-    if container_exists; then
-      "${CONTAINER_ENGINE}" container inspect \
-        --format 'name={{.Name}} status={{.State.Status}} image={{.Config.Image}}' \
-        "${container_name}"
-    else
-      printf 'name=%s status=not-created image=%s\n' "${container_name}" "${IMAGE}"
-    fi
-    exit 0
-    ;;
-  --container-stop)
-    stop_container
-    printf 'Stopped %s\n' "${container_name}"
-    exit 0
-    ;;
-esac
+if [[ "${1:-}" == "runtime" ]]; then
+  shift
+  case "${1:-}" in
+    container)
+      printf '%s\n' "${container_name}"
+      exit 0
+      ;;
+    status)
+      if container_exists; then
+        "${CONTAINER_ENGINE}" container inspect \
+          --format 'name={{.Name}} status={{.State.Status}} image={{.Config.Image}}' \
+          "${container_name}"
+      else
+        printf 'name=%s status=not-created image=%s\n' "${container_name}" "${IMAGE}"
+      fi
+      exit 0
+      ;;
+    stop)
+      stop_container
+      printf 'Stopped %s\n' "${container_name}"
+      exit 0
+      ;;
+    -h|--help|"")
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown Playwright runtime command: ${1}"
+      ;;
+  esac
+fi
 
 if ! "${CONTAINER_ENGINE}" volume inspect "${NODE_MODULES_VOLUME}" >/dev/null 2>&1; then
   "${CONTAINER_ENGINE}" volume create \
@@ -187,9 +200,7 @@ if [[ -n "${AGENT_BROWSER_PLAYWRIGHT_FORWARD_ENV:-}" ]]; then
   done
 fi
 
-if [[ "$#" -eq 0 ]]; then
-  set -- doctor
-fi
+[[ "$#" -gt 0 ]] || fail "missing Playwright command; run 'agent-browser-cli pw --help'"
 
 "${CONTAINER_ENGINE}" "${exec_args[@]}" "${container_name}" \
   /usr/bin/node \

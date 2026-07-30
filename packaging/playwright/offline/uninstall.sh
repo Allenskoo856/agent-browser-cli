@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'EOF'
-Uninstall agent-browser-playwright.
+Uninstall the containerized agent-browser-cli Playwright runtime.
 
 Usage:
   ./uninstall.sh [--remove-image] [--remove-node-modules-volume] [--yes]
@@ -104,7 +104,7 @@ fi
 
 if [[ -L "${COMMAND_PATH}" ]]; then
   command_target="$(readlink -f -- "${COMMAND_PATH}")"
-  expected_target="${install_root}/bin/agent-browser-playwright"
+  expected_target="${install_root}/bin/agent-browser-cli"
   if [[ "${command_target}" == "${expected_target}" ]]; then
     rm -- "${COMMAND_PATH}"
   else

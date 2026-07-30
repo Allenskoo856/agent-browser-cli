@@ -32,33 +32,33 @@ cd agent-browser-cli-playwright-*-offline-installer
 
 ```text
 ~/.local/share/agent-browser-cli-playwright
-~/.local/bin/agent-browser-playwright
+~/.local/bin/agent-browser-cli
 ```
 
 root 默认安装到：
 
 ```text
 /opt/agent-browser-cli-playwright
-/usr/local/bin/agent-browser-playwright
+/usr/local/bin/agent-browser-cli
 ```
 
 ## 使用
 
-安装后的命令直接对应 `agent-browser-cli pw` 的子命令：
+离线安装与普通安装使用统一的 `agent-browser-cli pw` 命令入口：
 
 ```bash
-agent-browser-playwright doctor
+agent-browser-cli pw doctor
 
-agent-browser-playwright session create \
+agent-browser-cli pw session create \
   --name order-smoke \
   --base-url https://order.test.intranet \
   --allow-host order.test.intranet \
   --trace
 
-agent-browser-playwright open /login --session order-smoke
-agent-browser-playwright snapshot --session order-smoke
-agent-browser-playwright screenshot --session order-smoke --full-page
-agent-browser-playwright session close order-smoke
+agent-browser-cli pw open /login --session order-smoke
+agent-browser-cli pw snapshot --session order-smoke
+agent-browser-cli pw screenshot --session order-smoke --full-page
+agent-browser-cli pw session close order-smoke
 ```
 
 命令会为当前工作目录维护一个后台 Runtime 容器，因此多次命令之间可以复用同一个
@@ -71,7 +71,7 @@ export E2E_BASE_URL=https://order.test.intranet
 export E2E_USER=agent-e2e
 export E2E_PASSWORD='通过安全介质注入'
 
-agent-browser-playwright test tests/e2e \
+agent-browser-cli pw test tests/e2e \
   --cwd /workspace/project \
   --config playwright.config.mjs \
   --report-dir /workspace/project/artifacts/e2e
@@ -88,9 +88,9 @@ export AGENT_BROWSER_PLAYWRIGHT_FORWARD_ENV=HTTPS_PROXY,NO_PROXY
 默认使用容器 `bridge` 网络。使用已经创建的受控网络：
 
 ```bash
-agent-browser-playwright --container-stop
+agent-browser-cli pw runtime stop
 export AGENT_BROWSER_PLAYWRIGHT_NETWORK=intranet-e2e
-agent-browser-playwright doctor
+agent-browser-cli pw doctor
 ```
 
 Linux 主机需要访问宿主机服务时，可明确使用：
@@ -99,8 +99,8 @@ Linux 主机需要访问宿主机服务时，可明确使用：
 export AGENT_BROWSER_PLAYWRIGHT_NETWORK=host
 ```
 
-修改网络、共享内存或额外容器参数前，先执行 `--container-stop`，修改后运行下一条
-命令即可创建新的 Runtime。
+修改网络、共享内存或额外容器参数前，先执行
+`agent-browser-cli pw runtime stop`，修改后运行下一条命令即可创建新的 Runtime。
 
 额外的容器创建参数可以逐行写入文件：
 
@@ -119,9 +119,9 @@ export AGENT_BROWSER_PLAYWRIGHT_RUN_ARGS_FILE=/etc/agent-browser-playwright/run-
 ## Runtime 管理
 
 ```bash
-agent-browser-playwright --container-status
-agent-browser-playwright --print-container
-agent-browser-playwright --container-stop
+agent-browser-cli pw runtime status
+agent-browser-cli pw runtime container
+agent-browser-cli pw runtime stop
 ```
 
 状态和测试制品默认保存在：

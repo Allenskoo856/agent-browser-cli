@@ -59,7 +59,7 @@ HOME="${test_home}" "${package_dir}/install.sh" \
   --engine docker \
   --yes
 
-launcher="${bin_dir}/agent-browser-playwright"
+launcher="${bin_dir}/agent-browser-cli"
 [[ -x "${launcher}" ]] || fail "installed launcher is missing"
 
 cat >"${fixture_dir}/fixture.html" <<'EOF'
@@ -101,24 +101,28 @@ printf 'Running persistent Session smoke test with container network disabled...
   export AGENT_BROWSER_PLAYWRIGHT_HOME="${test_home}/runtime-data"
   export AGENT_BROWSER_PLAYWRIGHT_NETWORK=none
 
-  "${launcher}" doctor |
+  "${launcher}" pw doctor |
     grep -Eq '"chromiumInstalled"[[:space:]]*:[[:space:]]*true'
-  "${launcher}" session create \
+  "${launcher}" pw runtime status |
+    grep -q 'status=running'
+  "${launcher}" pw runtime container |
+    grep -q '^agent-browser-playwright-'
+  "${launcher}" pw session create \
     --name offline-installer-smoke \
     --allow-host 127.0.0.1 \
     --trace
-  "${launcher}" content fixture.html --session offline-installer-smoke
-  "${launcher}" snapshot --session offline-installer-smoke |
+  "${launcher}" pw content fixture.html --session offline-installer-smoke
+  "${launcher}" pw snapshot --session offline-installer-smoke |
     grep -q '离线运行成功'
-  "${launcher}" session close offline-installer-smoke
+  "${launcher}" pw session close offline-installer-smoke
 
   printf 'Running standard Playwright Test from the bundled node_modules...\n'
-  "${launcher}" test offline-smoke.spec.mjs \
+  "${launcher}" pw test offline-smoke.spec.mjs \
     --cwd /workspace/project \
     --report-dir /workspace/project/artifacts |
     grep -q '1 passed'
 
-  "${launcher}" --container-stop
+  "${launcher}" pw runtime stop
 )
 
 printf 'Verifying uninstall...\n'

@@ -14,7 +14,7 @@ Options:
   --prefix <path>   Installation metadata directory.
                     root default: /opt/agent-browser-cli-playwright
                     user default: ~/.local/share/agent-browser-cli-playwright
-  --bin-dir <path>  Directory for the agent-browser-playwright command.
+  --bin-dir <path>  Directory for the agent-browser-cli command.
                     root default: /usr/local/bin
                     user default: ~/.local/bin
   --engine <cmd>    Container engine: auto, docker, podman, or an executable path.
@@ -150,7 +150,7 @@ printf 'Verifying offline medium checksums...\n'
   sha256sum --check --quiet --strict SHA256SUMS
 )
 
-command_path="${bin_dir}/agent-browser-playwright"
+command_path="${bin_dir}/agent-browser-cli"
 [[ ! -e "${prefix}" && ! -L "${prefix}" ]] ||
   fail "installation prefix already exists: ${prefix}; uninstall it before reinstalling"
 [[ ! -e "${command_path}" && ! -L "${command_path}" ]] ||
@@ -223,7 +223,7 @@ trap cleanup_stage EXIT
 
 mkdir -p -- "${parent_dir}" "${bin_dir}" "${stage_dir}/bin"
 install -m 0755 -- "${media_dir}/launcher.sh" \
-  "${stage_dir}/bin/agent-browser-playwright"
+  "${stage_dir}/bin/agent-browser-cli"
 install -m 0755 -- "${media_dir}/uninstall.sh" "${stage_dir}/uninstall.sh"
 install -m 0644 -- "${media_dir}/README-OFFLINE.md" \
   "${stage_dir}/README-OFFLINE.md"
@@ -241,15 +241,15 @@ touch "${stage_dir}/.agent-browser-playwright-install"
 chmod 0644 "${stage_dir}/config.env"
 
 mv -- "${stage_dir}" "${prefix}"
-ln -s -- "${prefix}/bin/agent-browser-playwright" "${command_path}"
+ln -s -- "${prefix}/bin/agent-browser-cli" "${command_path}"
 trap - EXIT
 
 printf '\nInstalled successfully.\n'
-"${command_path}" doctor
-"${command_path}" --container-stop >/dev/null
+"${command_path}" pw doctor
+"${command_path}" pw runtime stop >/dev/null
 
 printf '\nNext steps:\n'
-printf '  Run: %s doctor\n' "${command_path}"
+printf '  Run: %s pw doctor\n' "${command_path}"
 printf '  Read: %s/README-OFFLINE.md\n' "${prefix}"
 if [[ ":${PATH}:" != *":${bin_dir}:"* ]]; then
   printf '  Add %s to PATH.\n' "${bin_dir}"

@@ -513,30 +513,30 @@ cd agent-browser-cli-playwright-v0.3.6-linux-x64-offline-installer
 1. 校验介质内所有 SHA-256；
 2. 导入内置 OCI 镜像；
 3. 在 `--network none` 下执行 Runtime 和 Chromium 启动检查；
-4. 安装 `agent-browser-playwright` 命令；
+4. 安装统一的 `agent-browser-cli pw` 命令入口；
 5. 执行一次安装后自检。
 
 安装完成后直接运行：
 
 ```bash
-agent-browser-playwright doctor
-agent-browser-playwright session create \
+agent-browser-cli pw doctor
+agent-browser-cli pw session create \
   --name order-smoke \
   --allow-host order.test.intranet
-agent-browser-playwright open \
+agent-browser-cli pw open \
   https://order.test.intranet \
   --session order-smoke
-agent-browser-playwright session close order-smoke
+agent-browser-cli pw session close order-smoke
 ```
 
-安装命令对应 `agent-browser-cli pw` 的子命令。例如：
+离线安装与普通安装使用相同的 `agent-browser-cli pw` 命令。例如：
 
 ```bash
 export E2E_BASE_URL=https://order.test.intranet
 export E2E_USER=agent-e2e
 export E2E_PASSWORD='通过安全介质注入'
 
-agent-browser-playwright test tests/e2e \
+agent-browser-cli pw test tests/e2e \
   --cwd /workspace/project \
   --config playwright.config.mjs \
   --report-dir /workspace/project/artifacts/e2e
@@ -549,16 +549,16 @@ agent-browser-playwright test tests/e2e \
 使用受控内网容器网络：
 
 ```bash
-agent-browser-playwright --container-stop
+agent-browser-cli pw runtime stop
 export AGENT_BROWSER_PLAYWRIGHT_NETWORK=intranet-e2e
-agent-browser-playwright doctor
+agent-browser-cli pw doctor
 ```
 
 Runtime 管理和卸载：
 
 ```bash
-agent-browser-playwright --container-status
-agent-browser-playwright --container-stop
+agent-browser-cli pw runtime status
+agent-browser-cli pw runtime stop
 
 # 在安装目录执行
 ./uninstall.sh

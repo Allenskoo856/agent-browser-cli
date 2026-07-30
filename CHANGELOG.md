@@ -17,7 +17,7 @@
   Agent Skill 使用说明。
 - 新增 Linux x64 容器化离线安装器，介质包含 `install.sh`、持久 Runtime
   启动器、卸载脚本、OCI 镜像、完整 SHA-256 和离线说明；安装过程无需访问镜像
-  仓库或 npm。
+  仓库或 npm；普通安装和离线安装统一使用 `agent-browser-cli pw` 命令入口。
 
 ### 修复
 

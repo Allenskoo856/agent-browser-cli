@@ -223,18 +223,18 @@ tar -xzf \
   agent-browser-cli-playwright-v<version>-linux-x64-offline-installer.tar.gz
 cd agent-browser-cli-playwright-v<version>-linux-x64-offline-installer
 ./install.sh
-agent-browser-playwright doctor
+agent-browser-cli pw doctor
 ```
 
 安装器会校验介质、导入镜像、在断网容器中启动 Chromium、自检并安装
-`agent-browser-playwright`。该命令直接映射 `agent-browser-cli pw` 的子命令：
+统一的 `agent-browser-cli pw` 命令入口：
 
 ```bash
-agent-browser-playwright session create \
+agent-browser-cli pw session create \
   --name demo \
   --allow-host app.test.intranet
-agent-browser-playwright open https://app.test.intranet --session demo
-agent-browser-playwright session close demo
+agent-browser-cli pw open https://app.test.intranet --session demo
+agent-browser-cli pw session close demo
 ```
 
 现有 Debian 10/UOS 1050 Rust 二进制通过，并不代表 Playwright Chromium 可以在

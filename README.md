@@ -295,8 +295,8 @@ Playwright 的 Trace、截图和测试制品默认写入
 解压介质并执行 `./install.sh`，随后使用：
 
 ```bash
-agent-browser-playwright doctor
-agent-browser-playwright test tests/e2e --cwd /workspace/project
+agent-browser-cli pw doctor
+agent-browser-cli pw test tests/e2e --cwd /workspace/project
 ```
 
 ## 更新

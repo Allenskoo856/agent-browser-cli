@@ -290,8 +290,8 @@ The pipeline produces a Linux x86_64 containerized offline installer. On a host 
 Docker or Podman, extract the medium and run `./install.sh`, then use:
 
 ```bash
-agent-browser-playwright doctor
-agent-browser-playwright test tests/e2e --cwd /workspace/project
+agent-browser-cli pw doctor
+agent-browser-cli pw test tests/e2e --cwd /workspace/project
 ```
 
 ## Update
