@@ -1221,7 +1221,10 @@ fn ensure_server() -> Result<()> {
     if is_server_alive() {
         return Ok(());
     }
-    let lock_path = project_dir().join(".agent-browser-cli.lock");
+    let config_dir = config::user_config_dir()?;
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("创建配置目录失败: {}", config_dir.display()))?;
+    let lock_path = config_dir.join(".daemon.lock");
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)

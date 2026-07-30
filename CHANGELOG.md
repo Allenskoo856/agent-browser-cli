@@ -19,6 +19,11 @@
   启动器、卸载脚本、OCI 镜像、完整 SHA-256 和离线说明；安装过程无需访问镜像
   仓库或 npm。
 
+### 修复
+
+- 将 daemon 启动锁从程序二进制目录迁移到用户配置目录，支持从只读安装目录以
+  非 root 用户运行 CLI 和容器化 Playwright Runtime。
+
 ### 验证
 
 - 覆盖 Runtime 策略单测、Rust 全量单测、Clippy、无头 Chromium 页面交互、
