@@ -279,10 +279,20 @@ agent-browser-cli pw request https://order-api.test.intranet/health \
 agent-browser-cli pw test tests/e2e --cwd .
 ```
 
-Every network target requires an explicit `--allow-host`. Screenshots, traces and
-other artifacts are written under `~/.agent-browser-cli/playwright/artifacts/`.
+Top-level navigations and API requests initiated through the interactive CLI require
+an explicit `--allow-host`. Use a container network or firewall for complete egress
+control. Screenshots, traces and other artifacts are written under
+`~/.agent-browser-cli/playwright/artifacts/`.
 See [docs/PLAYWRIGHT-RUNTIME.md](./docs/PLAYWRIGHT-RUNTIME.md) for the architecture,
 security policy, environment variables and offline layout.
+
+The pipeline produces a Linux x86_64 containerized offline installer. On a host with
+Docker or Podman, extract the medium and run `./install.sh`, then use:
+
+```bash
+agent-browser-playwright doctor
+agent-browser-playwright test tests/e2e --cwd /workspace/project
+```
 
 ## Update
 

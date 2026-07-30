@@ -13,13 +13,18 @@
   daemon 退出时关闭全部隔离 Session。
 - 新增网络目标 allowlist、云 metadata/link-local 阻断、原始 JavaScript 显式授权
   和 artifacts 路径返回。
-- 新增 Playwright Runtime CI 门禁、Linux x64 离线 OCI 构建入口、双语 README、
-  Runtime 架构/离线文档和 Agent Skill 使用说明。
+- 新增 Playwright Runtime CI 门禁、双语 README、Runtime 架构/离线文档和
+  Agent Skill 使用说明。
+- 新增 Linux x64 容器化离线安装器，介质包含 `install.sh`、持久 Runtime
+  启动器、卸载脚本、OCI 镜像、完整 SHA-256 和离线说明；安装过程无需访问镜像
+  仓库或 npm。
 
 ### 验证
 
 - 覆盖 Runtime 策略单测、Rust 全量单测、Clippy、无头 Chromium 页面交互、
   APIRequestContext、截图、Trace 和标准 Playwright Test 冒烟测试。
+- 离线安装器在远程流水线中执行介质校验、断网镜像导入、Chromium 启动、跨命令
+  Session 复用、标准 Playwright Test 和卸载验证。
 
 ## 已发布
 

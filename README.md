@@ -283,12 +283,21 @@ agent-browser-cli pw request https://order-api.test.intranet/health \
 agent-browser-cli pw test tests/e2e --cwd .
 ```
 
-所有网络访问必须通过 `--allow-host` 明确授权；云 metadata 和链路本地地址会被
-阻止。Playwright 的 Trace、截图和测试制品默认写入
+通过交互式 CLI 发起的顶层导航和 API 请求必须通过 `--allow-host` 明确授权；云
+metadata 和链路本地地址会被阻止。完整出站限制仍需容器网络或防火墙。
+Playwright 的 Trace、截图和测试制品默认写入
 `~/.agent-browser-cli/playwright/artifacts/`，CLI 只返回路径和元数据。
 
 完整架构、环境变量和离线部署说明见
 [docs/PLAYWRIGHT-RUNTIME.md](./docs/PLAYWRIGHT-RUNTIME.md)。
+
+流水线提供 Linux x86_64 容器化离线安装器。目标机已有 Docker 或 Podman 时，
+解压介质并执行 `./install.sh`，随后使用：
+
+```bash
+agent-browser-playwright doctor
+agent-browser-playwright test tests/e2e --cwd /workspace/project
+```
 
 ## 更新
 

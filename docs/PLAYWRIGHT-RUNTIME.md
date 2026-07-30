@@ -199,38 +199,45 @@ AGENT_BROWSER_PLAYWRIGHT_DEBUG=1
 
 ## 离线交付
 
-推荐优先交付固定版本 OCI 镜像 tar；不能运行容器时再提供原生离线包。
-
-原生离线目录：
+流水线交付的是容器化离线安装器，而不是要求用户手工 `docker load` 的裸镜像包。
+介质结构：
 
 ```text
-agent-browser-playwright/
-  bin/agent-browser-cli
-  runtime/node/
-  runtime/playwright/
-  browsers/chromium/
-  skills/agent-browser-cli/
-  runtime-manifest.json
-  checksums.sha256
+agent-browser-cli-playwright-v<version>-linux-x64-offline-installer/
+  install.sh
+  launcher.sh
+  uninstall.sh
+  README-OFFLINE.md
+  BUILD_INFO.txt
+  SHA256SUMS
+  payload/
+    agent-browser-cli-playwright-<version>-linux-x64-image.tar.gz
 ```
 
-联网构建机准备浏览器：
+目标主机要求 Linux x86_64，并已经安装 Docker 或 Podman。安装不访问公网：
 
 ```bash
-PLAYWRIGHT_BROWSERS_PATH=/build/browsers \
-  npx playwright install chromium
+sha256sum -c \
+  agent-browser-cli-playwright-v<version>-linux-x64-offline-installer.tar.gz.sha256
+tar -xzf \
+  agent-browser-cli-playwright-v<version>-linux-x64-offline-installer.tar.gz
+cd agent-browser-cli-playwright-v<version>-linux-x64-offline-installer
+./install.sh
+agent-browser-playwright doctor
 ```
 
-离线运行：
+安装器会校验介质、导入镜像、在断网容器中启动 Chromium、自检并安装
+`agent-browser-playwright`。该命令直接映射 `agent-browser-cli pw` 的子命令：
 
 ```bash
-export AGENT_BROWSER_PLAYWRIGHT_NODE=/opt/agent-browser/runtime/node/bin/node
-export AGENT_BROWSER_PLAYWRIGHT_RUNTIME=/opt/agent-browser/runtime/playwright/src/runtime.mjs
-export PLAYWRIGHT_BROWSERS_PATH=/opt/agent-browser/browsers
-agent-browser-cli pw doctor
+agent-browser-playwright session create \
+  --name demo \
+  --allow-host app.test.intranet
+agent-browser-playwright open https://app.test.intranet --session demo
+agent-browser-playwright session close demo
 ```
 
-离线包必须固定并记录 Node、`playwright-core`、`@playwright/test` 和 Chromium
-revision，生成 SHA-256 和 SBOM，并在目标系统执行断网安装与无头启动测试。现有
-Debian 10/UOS 1050 Rust 二进制通过，并不代表 Playwright Chromium 在该系统原生
-兼容；该目标需要单独的真实运行验证，或使用已经验证的容器运行时。
+现有 Debian 10/UOS 1050 Rust 二进制通过，并不代表 Playwright Chromium 可以在
+该系统原生运行。当前安装器明确使用容器固定 Node、Playwright、Chromium、字体及
+动态库；如果目标环境不能运行容器，需要单独设计并验证原生离线包，不能复用本介质
+的兼容性结论。

@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: playwright-offline-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-linux-x64:
     runs-on: ubuntu-latest
@@ -17,11 +21,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build offline image
+      - name: Check offline installer scripts
+        run: |
+          bash -n packaging/playwright/build-container.sh
+          bash -n packaging/playwright/offline/install.sh
+          bash -n packaging/playwright/offline/launcher.sh
+          bash -n packaging/playwright/offline/uninstall.sh
+          bash -n scripts/verify-playwright-offline-installer.sh
+          packaging/playwright/offline/install.sh --help >/dev/null
+      - name: Build offline installer
         run: bash packaging/playwright/build-container.sh
+      - name: Verify offline installation and headless runtime
+        run: |
+          set -o pipefail
+          bash scripts/verify-playwright-offline-installer.sh \
+            dist/playwright-offline \
+            2>&1 | tee dist/playwright-offline/OFFLINE_SMOKE_TEST.txt
+      - name: List offline installer files
+        run: |
+          find dist/playwright-offline -maxdepth 1 -type f \
+            -printf '%f\t%s bytes\n' | sort
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-browser-cli-playwright-linux-x64-${{ github.sha }}
+          name: agent-browser-cli-playwright-offline-installer-linux-x64-${{ github.sha }}
           path: dist/playwright-offline/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+          compression-level: 0

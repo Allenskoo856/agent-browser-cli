@@ -483,57 +483,89 @@ CI 设计建议：
 - 测试产生的数据使用唯一前缀，并在用例结束后清理；
 - 不把忽略 HTTPS 错误设为默认值。
 
-## 8. 使用离线镜像介质
+## 8. 使用容器化离线安装器
 
-校验并导入镜像：
+流水线产物不是裸镜像，而是可解压安装的介质：
 
 ```bash
-sha256sum agent-browser-cli-playwright-0.3.6-linux-x64.tar.gz
-cat agent-browser-cli-playwright-0.3.6-linux-x64.tar.gz.sha256
-docker load < agent-browser-cli-playwright-0.3.6-linux-x64.tar.gz
-docker image inspect agent-browser-cli-playwright:0.3.6
+sha256sum --check \
+  agent-browser-cli-playwright-v0.3.6-linux-x64-offline-installer.tar.gz.sha256
+tar -xzf \
+  agent-browser-cli-playwright-v0.3.6-linux-x64-offline-installer.tar.gz
+cd agent-browser-cli-playwright-v0.3.6-linux-x64-offline-installer
+./install.sh
 ```
 
-导入前确认 `sha256sum` 输出的摘要与介质内 `.sha256` 文件第一列一致。
+目标主机要求：
 
-Runtime 自检：
+- Linux x86_64；
+- 已安装并启动 Docker 或 Podman；
+- 安装过程不需要访问镜像仓库、npm 或公网。
+
+无人值守安装：
 
 ```bash
-docker run --rm \
-  --init \
-  --shm-size=1g \
-  agent-browser-cli-playwright:0.3.6 \
-  pw doctor
+./install.sh --yes
 ```
 
-运行挂载的测试：
+安装器会自动：
+
+1. 校验介质内所有 SHA-256；
+2. 导入内置 OCI 镜像；
+3. 在 `--network none` 下执行 Runtime 和 Chromium 启动检查；
+4. 安装 `agent-browser-playwright` 命令；
+5. 执行一次安装后自检。
+
+安装完成后直接运行：
 
 ```bash
-mkdir -p artifacts
+agent-browser-playwright doctor
+agent-browser-playwright session create \
+  --name order-smoke \
+  --allow-host order.test.intranet
+agent-browser-playwright open \
+  https://order.test.intranet \
+  --session order-smoke
+agent-browser-playwright session close order-smoke
+```
 
-docker run --rm \
-  --init \
-  --shm-size=1g \
-  --network intranet-e2e \
-  -e E2E_BASE_URL=https://order.test.intranet \
-  -e E2E_USER \
-  -e E2E_PASSWORD \
-  -v "$PWD/tests/e2e:/opt/agent-browser-cli/tests/e2e:ro" \
-  -v "$PWD/playwright.config.mjs:/opt/agent-browser-cli/playwright.config.mjs:ro" \
-  -v "$PWD/artifacts:/data/artifacts" \
-  agent-browser-cli-playwright:0.3.6 \
-  pw test tests/e2e \
-  --cwd /opt/agent-browser-cli \
+安装命令对应 `agent-browser-cli pw` 的子命令。例如：
+
+```bash
+export E2E_BASE_URL=https://order.test.intranet
+export E2E_USER=agent-e2e
+export E2E_PASSWORD='通过安全介质注入'
+
+agent-browser-playwright test tests/e2e \
+  --cwd /workspace/project \
   --config playwright.config.mjs \
-  --report-dir /data/artifacts
+  --report-dir /workspace/project/artifacts/e2e
 ```
 
-把测试文件挂载到 `/opt/agent-browser-cli` 下，是为了复用镜像中已经离线安装的
-`@playwright/test`。宿主机的 `artifacts` 目录必须允许容器内 `pwuser` 写入。
+启动器会把当前项目目录挂载到容器 `/workspace/project`，并为当前工作目录维护一个
+后台 Runtime 容器，使多个命令之间可以复用隔离 Session。`E2E_*` 环境变量自动
+转发。
 
-交互式 `pw session` 的截图和 Trace 默认写入容器内
-`/home/pwuser/.agent-browser-cli/playwright/artifacts`。需要持久化时挂载该目录，并
-确保容器内 `pwuser` 有写权限。
+使用受控内网容器网络：
+
+```bash
+agent-browser-playwright --container-stop
+export AGENT_BROWSER_PLAYWRIGHT_NETWORK=intranet-e2e
+agent-browser-playwright doctor
+```
+
+Runtime 管理和卸载：
+
+```bash
+agent-browser-playwright --container-status
+agent-browser-playwright --container-stop
+
+# 在安装目录执行
+./uninstall.sh
+```
+
+安装器默认保留用户测试数据，避免误删截图、Trace 和报告。完整说明见介质中的
+`README-OFFLINE.md`。
 
 ## 9. 复用真实 Chrome 登录态排查 Bug
 
