@@ -1,5 +1,9 @@
 # Playwright 隔离运行时
 
+面向开发、测试和 Agent 使用者的完整操作流程、测试案例生成方式、CI 示例及真实
+Chrome 登录态排障方法，见
+[自动化测试与真实会话排障手册](./AUTOMATION-TESTING-GUIDE.md)。
+
 ## 定位
 
 `agent-browser-cli` 提供两个互补的浏览器引擎：
@@ -159,7 +163,7 @@ agent-browser-cli pw test tests/e2e \
 
 ## 网络安全
 
-每次页面导航或 API 请求都必须配置 `allowedHosts`：
+通过交互式 CLI 发起的顶层页面导航或 API 请求必须配置 `allowedHosts`：
 
 - Session 使用一个或多个 `--allow-host`
 - 无 Session 的 API 请求也必须使用 `--allow-host`
@@ -167,7 +171,9 @@ agent-browser-cli pw test tests/e2e \
 - `169.254.169.254`、metadata hostname、IPv4/IPv6 link-local 地址始终禁止
 - allowlist hostname 如果解析到 link-local 地址也会被拒绝
 
-建议生产部署额外在容器或主机防火墙层限制出站网络。
+`allowedHosts` 是 CLI 调用层的目标校验，不是完整的出站防火墙，不能保证拦截页面
+加载的每个子资源、页面脚本请求或所有重定向链路。生产和内网部署必须额外在容器、
+主机防火墙或受控代理层限制出站网络。
 
 ## Runtime 环境变量
 
