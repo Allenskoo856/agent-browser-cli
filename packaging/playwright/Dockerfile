@@ -3,6 +3,7 @@ FROM rust:1.93-bookworm AS rust-builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY assets ./assets
 RUN cargo build --release --locked --bin agent-browser-cli
 
 FROM mcr.microsoft.com/playwright:v1.62.0-noble
@@ -10,6 +11,7 @@ FROM mcr.microsoft.com/playwright:v1.62.0-noble
 WORKDIR /opt/agent-browser-cli
 COPY package.json package-lock.json ./
 COPY npm ./npm
+COPY assets ./assets
 COPY runtime ./runtime
 COPY skills ./skills
 COPY docs ./docs
